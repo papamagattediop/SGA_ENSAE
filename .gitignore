@@ -1,0 +1,15 @@
+# les fichiers .env
+.env
+# les fichiers de log*.log
+# les fichiers de cache
+__pycache__/
+# les fichiers de build
+build/
+dist/
+*.egg-info/
+# les fichiers de configuration de l'IDE
+.vscode/
+.idea/
+# les fichiers de venv
+.venv/
+venv/

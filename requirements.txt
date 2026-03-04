@@ -1,0 +1,28 @@
+# ============================================================
+#  SGA ENSAE — requirements.txt
+# ============================================================
+
+# Framework web
+dash==2.17.0
+dash-bootstrap-components==1.6.0
+
+# Base de données
+sqlalchemy==2.0.30
+
+# Données
+pandas==2.2.2
+openpyxl==3.1.2
+xlsxwriter==3.2.0
+
+# PDF
+reportlab==4.2.0
+
+# Auth & Config
+python-dotenv==1.0.1
+bcrypt==4.1.3
+
+# Visualisations
+plotly==5.22.0
+
+# Email
+# (smtplib inclus dans Python standard)
