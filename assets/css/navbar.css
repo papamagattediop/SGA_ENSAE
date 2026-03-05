@@ -1,0 +1,142 @@
+/* ============================================================
+   SGA ENSAE — assets/navbar.css
+   Navbar avec menus déroulants CSS pur
+   ============================================================ */
+
+.sga-navbar {
+    background: linear-gradient(135deg, #003580 0%, #002060 100%);
+    border-bottom: 3px solid #F5A623;
+    padding: 0 28px;
+    height: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    box-shadow: 0 2px 16px rgba(0,53,128,0.35);
+    font-family: 'Inter', sans-serif;
+}
+
+/* ── Logo ── */
+.sga-logo {
+    display: flex; align-items: center; gap: 10px;
+    text-decoration: none; flex-shrink: 0;
+}
+.sga-logo img {
+    height: 40px; width: auto; border-radius: 7px; padding: 3px;
+    background: rgba(255,255,255,0.92);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2), 0 0 0 1.5px rgba(245,166,35,0.5);
+}
+.sga-logo-title {
+    font-family: 'Montserrat', sans-serif; font-weight: 800;
+    font-size: 0.92rem; color: #fff; letter-spacing: 0.4px; line-height: 1.15;
+}
+.sga-logo-sub { font-size: 0.58rem; color: rgba(255,255,255,0.55); }
+
+/* ── Nav list ── */
+.sga-nav {
+    display: flex; align-items: center; gap: 2px;
+    list-style: none; margin: 0; padding: 0; height: 58px;
+}
+
+/* ── Lien simple ── */
+.sga-link {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 12px; border-radius: 7px;
+    color: rgba(255,255,255,0.82); font-size: 0.82rem; font-weight: 500;
+    text-decoration: none; white-space: nowrap;
+    transition: background 0.18s, color 0.18s;
+}
+.sga-link:hover { background: rgba(255,255,255,0.13); color: #fff; text-decoration: none; }
+.sga-link .mi   { font-family: 'Material Symbols Outlined'; font-size: 17px; line-height: 1; }
+
+/* ── Dropdown ── */
+.sga-dd {
+    position: relative; height: 58px;
+    display: flex; align-items: center;
+}
+.sga-dd-btn {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 12px; border-radius: 7px;
+    color: rgba(255,255,255,0.82); font-size: 0.82rem; font-weight: 500;
+    cursor: pointer; white-space: nowrap; -webkit-user-select: none; user-select: none;
+    transition: background 0.18s, color 0.18s;
+}
+.sga-dd-btn:hover            { background: rgba(255,255,255,0.13); color: #fff; }
+.sga-dd-btn .mi              { font-family: 'Material Symbols Outlined'; font-size: 17px; line-height: 1; }
+.sga-dd-btn .chv             { font-family: 'Material Symbols Outlined'; font-size: 14px;
+                                line-height: 1; opacity: 0.7; transition: transform 0.2s; }
+.sga-dd:hover .chv           { transform: rotate(180deg); }
+.sga-dd:hover .sga-dd-btn    { background: rgba(255,255,255,0.13); color: #fff; }
+
+.sga-dd-menu {
+    display: none; position: absolute; top: 54px; left: 0;
+    min-width: 215px; background: #fff; border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0,53,128,0.18), 0 2px 8px rgba(0,0,0,0.1);
+    border: 1px solid #e5e7eb; padding: 6px;
+    z-index: 2000; list-style: none; margin: 0;
+    animation: sgaFade 0.15s ease;
+}
+@keyframes sgaFade {
+    from { opacity: 0; transform: translateY(-5px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.sga-dd:hover .sga-dd-menu { display: block; }
+
+.sga-dd-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px; border-radius: 7px;
+    color: #374151; font-size: 0.82rem; font-weight: 500;
+    text-decoration: none; white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+}
+.sga-dd-item:hover { background: #eff6ff; color: #003580; text-decoration: none; }
+.sga-dd-item .mi  { font-family: 'Material Symbols Outlined'; font-size: 17px; line-height: 1; }
+
+.sga-sep { height: 1px; background: #f3f4f6; margin: 4px 6px; }
+.sga-grp {
+    padding: 6px 12px 3px; font-size: 0.6rem; font-weight: 700;
+    color: #9ca3af; text-transform: uppercase; letter-spacing: 0.9px;
+    font-family: 'Montserrat', sans-serif;
+}
+
+/* ── Zone utilisateur ── */
+.sga-user {
+    position: relative; height: 58px;
+    display: flex; align-items: center; gap: 10px;
+    padding-left: 14px; border-left: 1px solid rgba(255,255,255,0.2);
+    cursor: pointer;
+}
+.sga-avatar {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: #F5A623; color: #003580;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 0.72rem;
+    font-family: 'Montserrat', sans-serif; flex-shrink: 0;
+}
+.sga-uname { color: #fff; font-size: 0.78rem; font-weight: 600; line-height: 1.2; }
+.sga-urole { color: #F5A623; font-size: 0.6rem; }
+
+.sga-user-menu {
+    display: none; position: absolute; top: 54px; right: 0;
+    min-width: 200px; background: #fff; border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0,53,128,0.18); border: 1px solid #e5e7eb;
+    padding: 6px; z-index: 2000; animation: sgaFade 0.15s ease;
+}
+.sga-user:hover .sga-user-menu { display: block; }
+
+.sga-user-header {
+    padding: 10px 12px 8px; border-bottom: 1px solid #f3f4f6; margin-bottom: 4px;
+}
+.sga-user-fullname { font-weight: 700; font-size: 0.82rem; color: #111827; font-family: 'Inter', sans-serif; }
+.sga-user-rolelbl  { font-size: 0.7rem; color: #9ca3af; margin-top: 1px; }
+
+.sga-logout {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px; border-radius: 7px;
+    color: #ef4444; font-size: 0.82rem; font-weight: 600;
+    text-decoration: none; transition: background 0.15s;
+}
+.sga-logout:hover { background: #fef2f2; text-decoration: none; color: #ef4444; }
+.sga-logout .mi   { font-family: 'Material Symbols Outlined'; font-size: 17px; line-height: 1; }

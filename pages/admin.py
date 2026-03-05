@@ -8,12 +8,13 @@ import dash
 from dash import html, dcc, callback, Input, Output, State, ctx
 import dash_bootstrap_components as dbc
 from auth import require_auth, hash_password
-from database import SessionLocal
+from database import SessionLocal, engine
 from models import (
     User, Etudiant, ResponsableClasse, ResponsableFiliere,
     Classe, Filiere, RoleEnum, MigrationLog
 )
 from datetime import datetime
+import time
 
 dash.register_page(__name__, path="/admin", title="SGA ENSAE — Administration")
 
@@ -59,7 +60,9 @@ def get_users(role_filtre=None, search=None):
         for u in users:
             extra = ""
             if u.role == RoleEnum.resp_classe and u.resp_classes:
-                extra = u.resp_classes[0].classe.nom if u.resp_classes[0].classe else ""
+                rc    = u.resp_classes[0]
+                tit   = "Titulaire" if getattr(rc, "est_titulaire", True) else "Suppleant"
+                extra = f"{rc.classe.nom} ({tit})" if rc.classe else ""
             elif u.role == RoleEnum.resp_filiere and u.resp_filieres:
                 extra = u.resp_filieres[0].filiere.libelle if u.resp_filieres[0].filiere else ""
             elif u.role == RoleEnum.eleve and u.etudiant:
@@ -72,7 +75,7 @@ def get_users(role_filtre=None, search=None):
                 "role"     : u.role.value if u.role else "-",
                 "actif"    : u.is_active,
                 "extra"    : extra,
-                "created"  : u.created_at.strftime("%d/%m/%Y") if u.created_at else "-",
+                "created"  : getattr(u, "created_at", None) and u.created_at.strftime("%d/%m/%Y") or "-",
             })
         return result
     finally:
@@ -208,7 +211,7 @@ def btn_outline(label, btn_id):
 # ============================================================
 
 layout = html.Div([
-    dcc.Store(id="admin-refresh"),
+    dcc.Store(id="admin-refresh", data=0),
     dcc.Upload(id="admin-upload-migration", accept=".xlsx",
                children=html.Div(id="admin-upload-zone")),
 
@@ -272,7 +275,34 @@ layout = html.Div([
                             style=input_style()
                         )
                     ]),
-                    btn_primary("+ Ajouter un responsable", "btn-open-add-user", BLEU),
+                    html.Div(style={"display": "flex", "gap": "8px"}, children=[
+                        html.Button(
+                            [html.Span("person_add", className="material-symbols-outlined",
+                                       style={"fontSize": "16px", "verticalAlign": "middle",
+                                              "marginRight": "6px"}),
+                             "Resp. Classe"],
+                            id="btn-open-resp-classe", n_clicks=0,
+                            style={
+                                "background": OR, "color": "#ffffff", "border": "none",
+                                "borderRadius": "8px", "padding": "9px 16px",
+                                "fontFamily": "'Montserrat', sans-serif",
+                                "fontWeight": "600", "fontSize": "0.82rem", "cursor": "pointer"
+                            }
+                        ),
+                        html.Button(
+                            [html.Span("supervisor_account", className="material-symbols-outlined",
+                                       style={"fontSize": "16px", "verticalAlign": "middle",
+                                              "marginRight": "6px"}),
+                             "Resp. Filiere"],
+                            id="btn-open-resp-filiere", n_clicks=0,
+                            style={
+                                "background": BLEU, "color": "#ffffff", "border": "none",
+                                "borderRadius": "8px", "padding": "9px 16px",
+                                "fontFamily": "'Montserrat', sans-serif",
+                                "fontWeight": "600", "fontSize": "0.82rem", "cursor": "pointer"
+                            }
+                        ),
+                    ]),
                 ]),
 
                 # Feedback
@@ -438,47 +468,110 @@ layout = html.Div([
             ])
         ]),
 
+
     ], id="admin-tabs", active_tab="tab-users"),
 
-    # ── Modal ajout responsable ─────────────────────────────
+    # ── Modal Resp. Classe — designer depuis la liste ───────
     dbc.Modal([
-        dbc.ModalHeader(dbc.ModalTitle("Ajouter un responsable")),
+        dbc.ModalHeader(dbc.ModalTitle("Designer un Responsable de Classe")),
+        dbc.ModalBody([
+            html.P(
+                "Selectionnez la classe puis choisissez un etudiant ou enseignant "
+                "deja inscrit pour le designer comme responsable.",
+                style={"color": "#6b7280", "fontSize": "0.82rem",
+                       "fontFamily": "'Inter', sans-serif", "marginBottom": "16px"}
+            ),
+            field("Classe", dcc.Dropdown(
+                id="rc-classe",
+                placeholder="Selectionner une classe...",
+                style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"}
+            )),
+            field("Personne a designer", dcc.Dropdown(
+                id="rc-personne",
+                placeholder="Selectionnez d'abord une classe...",
+                style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"}
+            )),
+            field("Type de delegue", dcc.RadioItems(
+                id="rc-type",
+                options=[
+                    {"label": html.Span([
+                        html.Span("star", className="material-symbols-outlined",
+                                  style={"fontSize": "16px", "verticalAlign": "middle",
+                                         "marginRight": "4px", "color": "#F5A623"}),
+                        "Titulaire"
+                     ], style={"display": "inline-flex", "alignItems": "center"}),
+                     "value": "titulaire"},
+                    {"label": html.Span([
+                        html.Span("person", className="material-symbols-outlined",
+                                  style={"fontSize": "16px", "verticalAlign": "middle",
+                                         "marginRight": "4px", "color": "#6b7280"}),
+                        "Suppleant(e)"
+                     ], style={"display": "inline-flex", "alignItems": "center"}),
+                     "value": "suppleant"},
+                ],
+                value="titulaire",
+                inline=True,
+                style={"gap": "20px", "fontFamily": "'Inter', sans-serif",
+                       "fontSize": "0.875rem"}
+            )),
+            # Info sur les delegues actuels
+            html.Div(id="rc-delegues-actuels", style={
+                "background": "#f9fafb", "borderRadius": "8px",
+                "padding": "10px 14px", "marginBottom": "8px",
+                "border": "1px solid #e5e7eb", "fontSize": "0.78rem",
+                "fontFamily": "'Inter', sans-serif", "color": "#6b7280"
+            }),
+            html.Div(id="rc-nouveau-container"),
+            html.Div(id="rc-feedback",
+                     style={"color": "#ef4444", "fontSize": "0.8rem", "marginTop": "8px"})
+        ]),
+        dbc.ModalFooter([
+            btn_primary("Confirmer",  "btn-save-resp-classe", OR),
+            btn_outline("Annuler",    "btn-cancel-resp-classe")
+        ])
+    ], id="modal-resp-classe", is_open=False, size="lg"),
+
+    # ── Modal Resp. Filiere ──────────────────────────────────
+    dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle("Ajouter un Responsable de Filiere")),
         dbc.ModalBody([
             dbc.Row([
                 dbc.Col(field("Nom", dbc.Input(
-                    id="user-nom", placeholder="ex: DIALLO",
+                    id="rf-nom", placeholder="ex: FALL",
                     style=input_style())), md=6),
                 dbc.Col(field("Prenom", dbc.Input(
-                    id="user-prenom", placeholder="ex: Mamadou",
+                    id="rf-prenom", placeholder="ex: Ibrahima",
                     style=input_style())), md=6),
             ]),
             field("Email", dbc.Input(
-                id="user-email", type="email",
-                placeholder="ex: mdiallo@ensae.sn",
+                id="rf-email", type="email",
+                placeholder="ex: ifall@ensae.sn",
                 style=input_style())),
-            field("Role", dcc.Dropdown(
-                id="user-role",
-                options=[
-                    {"label": "Admin",            "value": "admin"},
-                    {"label": "Resp. Filiere",    "value": "resp_filiere"},
-                    {"label": "Resp. Classe",     "value": "resp_classe"},
-                ],
-                placeholder="Selectionner un role",
+            field("Filiere", dcc.Dropdown(
+                id="rf-filiere",
+                placeholder="Selectionner une filiere",
                 style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"}
             )),
-            html.Div(id="user-affectation-container"),
-            field("Mot de passe", dbc.Input(
-                id="user-password", type="password",
-                placeholder="Minimum 6 caracteres",
+            field("Mot de passe provisoire", dbc.Input(
+                id="rf-password", type="password",
+                placeholder="Obligatoire pour nouveau compte, optionnel si existant",
                 style=input_style())),
-            html.Div(id="admin-add-user-feedback",
+            html.Div(id="rf-feedback",
                      style={"color": "#ef4444", "fontSize": "0.8rem"})
         ]),
         dbc.ModalFooter([
-            btn_primary("Enregistrer", "btn-save-user", BLEU),
-            btn_outline("Annuler",     "btn-cancel-user")
+            btn_primary("Enregistrer", "btn-save-resp-filiere", BLEU),
+            btn_outline("Annuler",     "btn-cancel-resp-filiere")
         ])
-    ], id="modal-add-user", is_open=False, size="lg"),
+    ], id="modal-resp-filiere", is_open=False, size="lg"),
+
+    # Garde un Dropdown hidden pour compatibilite callbacks
+    html.Div(dcc.Dropdown(id="user-affectation", style={"display": "none"}),
+             style={"display": "none"}),
+    html.Div(id="user-role",           style={"display": "none"}),
+    html.Div(id="user-affectation-container", style={"display": "none"}),
+    html.Div(id="admin-add-user-feedback",    style={"display": "none"}),
+    html.Div(id="modal-add-user",             style={"display": "none"}),
 
     # ── Modal ajout filiere ──────────────────────────────────
     dbc.Modal([
@@ -539,7 +632,7 @@ layout = html.Div([
     Input("admin-refresh", "data")
 )
 def load_kpis(session, _):
-    ok, _ = require_auth(session, roles=["admin"])
+    ok, _ = require_auth(session, required_roles=["admin"])
     if not ok:
         return html.Div()
     s = get_stats()
@@ -616,10 +709,12 @@ def afficher_users(role, search, _):
 
 @callback(
     Output("admin-liste-filieres", "children"),
-    Input("admin-refresh", "data"),
-    Input("session-store", "data")
+    Input("admin-refresh",  "data"),
+    Input("admin-tabs",     "active_tab"),
 )
-def afficher_filieres(_, session):
+def afficher_filieres(_, active_tab):
+    if active_tab != "tab-structure":
+        return dash.no_update
     db = SessionLocal()
     try:
         filieres = db.query(Filiere).all()
@@ -636,7 +731,7 @@ def afficher_filieres(_, session):
                 "marginBottom": "6px", "background": "#fafafa"
             }, children=[
                 html.Div([
-                    html.Span(f["code"] if hasattr(f, "code") else f.code, style={
+                    html.Span(f.code, style={
                         "background": f"{BLEU}15", "color": BLEU,
                         "padding": "1px 7px", "borderRadius": "4px",
                         "fontSize": "0.7rem", "fontWeight": "700",
@@ -660,10 +755,12 @@ def afficher_filieres(_, session):
 
 @callback(
     Output("admin-liste-classes", "children"),
-    Input("admin-refresh", "data"),
-    Input("session-store", "data")
+    Input("admin-refresh",  "data"),
+    Input("admin-tabs",     "active_tab"),
 )
-def afficher_classes(_, session):
+def afficher_classes(_, active_tab):
+    if active_tab != "tab-structure":
+        return dash.no_update
     db = SessionLocal()
     try:
         classes = db.query(Classe).order_by(Classe.nom).all()
@@ -704,10 +801,10 @@ def afficher_classes(_, session):
 
 @callback(
     Output("migration-historique", "children"),
-    Input("admin-refresh", "data"),
-    Input("session-store", "data")
+    Input("admin-refresh",  "data"),
+    Input("admin-tabs",     "active_tab"),
 )
-def afficher_migrations(_, session):
+def afficher_migrations(_, active_tab):
     logs = get_migrations()
     if not logs:
         return html.P("Aucun import effectue.", style={
@@ -749,16 +846,184 @@ def afficher_migrations(_, session):
     ])
 
 
-# -- Modals --
+# -- Modals Resp Classe --
 @callback(
-    Output("modal-add-user", "is_open"),
-    Input("btn-open-add-user", "n_clicks"),
-    Input("btn-cancel-user",   "n_clicks"),
-    Input("btn-save-user",     "n_clicks"),
+    Output("modal-resp-classe", "is_open"),
+    Input("btn-open-resp-classe",   "n_clicks"),
+    Input("btn-cancel-resp-classe", "n_clicks"),
+    Input("btn-save-resp-classe",   "n_clicks"),
     prevent_initial_call=True
 )
-def toggle_modal_user(o, c, s):
-    return ctx.triggered_id == "btn-open-add-user"
+def toggle_modal_rc(o, c, s):
+    return ctx.triggered_id == "btn-open-resp-classe"
+
+
+@callback(
+    Output("rc-classe",  "options"),
+    Output("rf-filiere", "options"),
+    Input("session-store", "data")
+)
+def load_dropdowns(_):
+    return get_classes(), get_filieres()
+
+
+@callback(
+    Output("rc-personne", "options"),
+    Output("rc-personne", "placeholder"),
+    Input("rc-classe",    "value")
+)
+def load_personnes_classe(classe_id):
+    if not classe_id:
+        return [], "Selectionnez d abord une classe..."
+    db = SessionLocal()
+    try:
+        # Etudiants de la classe
+        etudiants = db.query(Etudiant).filter(
+            Etudiant.classe_id == classe_id
+        ).join(User).order_by(User.nom).all()
+
+        # Utilisateurs deja resp_classe ou resp_filiere (enseignants/admins)
+        autres = db.query(User).filter(
+            User.role.in_([RoleEnum.resp_classe, RoleEnum.resp_filiere, RoleEnum.admin])
+        ).order_by(User.nom).all()
+
+        opts = []
+        if etudiants:
+            opts.append({"label": "── Etudiants de la classe ──", "value": "",
+                         "disabled": True})
+            for e in etudiants:
+                if e.user:
+                    opts.append({
+                        "label": f"{e.user.prenom} {e.user.nom} ({e.matricule})",
+                        "value": e.user_id
+                    })
+        if autres:
+            opts.append({"label": "── Autres utilisateurs ──", "value": "",
+                         "disabled": True})
+            for u in autres:
+                opts.append({
+                    "label": f"{u.prenom} {u.nom} — {u.role.value}",
+                    "value": u.id
+                })
+
+        if not opts:
+            return [], "Aucune personne trouvee dans cette classe"
+        return opts, "Selectionner une personne..."
+    finally:
+        db.close()
+
+
+@callback(
+    Output("rc-delegues-actuels", "children"),
+    Input("rc-classe", "value"),
+    Input("admin-refresh", "data")
+)
+def show_delegues_actuels(classe_id, _):
+    if not classe_id:
+        return "Selectionnez une classe pour voir les delegues actuels."
+    db = SessionLocal()
+    try:
+        resp = db.query(ResponsableClasse).filter(
+            ResponsableClasse.classe_id == classe_id
+        ).all()
+        if not resp:
+            return html.Span("Aucun delegue designe pour cette classe.",
+                             style={"color": "#9ca3af"})
+        items = []
+        for r in resp:
+            u = r.user
+            est_tit = getattr(r, "est_titulaire", True)
+            label   = "Titulaire" if est_tit else "Suppleant(e)"
+            color   = OR if est_tit else "#6b7280"
+            icon    = "star" if est_tit else "person"
+            items.append(html.Div(style={
+                "display": "inline-flex", "alignItems": "center",
+                "gap": "6px", "marginRight": "16px"
+            }, children=[
+                html.Span(icon, className="material-symbols-outlined",
+                          style={"fontSize": "15px", "color": color}),
+                html.Span(f"{label} : ", style={"fontWeight": "600", "color": color}),
+                html.Span(f"{u.prenom} {u.nom}" if u else "?",
+                          style={"color": "#374151"})
+            ]))
+        return html.Div(items)
+    finally:
+        db.close()
+
+
+@callback(
+    Output("rc-feedback",    "children"),
+    Output("admin-refresh",  "data", allow_duplicate=True),
+    Output("modal-resp-classe", "is_open", allow_duplicate=True),
+    Input("btn-save-resp-classe", "n_clicks"),
+    State("rc-classe",   "value"),
+    State("rc-personne", "value"),
+    State("rc-type",     "value"),
+    prevent_initial_call=True
+)
+def save_resp_classe(n, classe_id, user_id, rc_type):
+    est_titulaire = (rc_type == "titulaire")
+    if not classe_id or not user_id:
+        return "Veuillez selectionner une classe et une personne.", None, True
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return "Utilisateur introuvable.", None, True
+
+        # Changer le role en resp_classe si necessaire
+        if user.role == RoleEnum.eleve:
+            user.role = RoleEnum.resp_classe
+
+        # Supprimer l'eventuelle affectation existante du meme type pour cette classe
+        old_same_type = db.query(ResponsableClasse).filter(
+            ResponsableClasse.classe_id == classe_id,
+            ResponsableClasse.est_titulaire == est_titulaire
+        ).first()
+        if old_same_type:
+            # Remettre l'ancien en eleve si plus aucune affectation
+            old_user = db.query(User).filter(User.id == old_same_type.user_id).first()
+            db.delete(old_same_type)
+            db.flush()
+            if old_user:
+                remaining = db.query(ResponsableClasse).filter(
+                    ResponsableClasse.user_id == old_user.id
+                ).count()
+                if remaining == 0:
+                    old_user.role = RoleEnum.eleve
+
+        # Supprimer si cette personne etait deja resp de cette classe (autre type)
+        old_person = db.query(ResponsableClasse).filter(
+            ResponsableClasse.user_id == user_id,
+            ResponsableClasse.classe_id == classe_id
+        ).first()
+        if old_person:
+            db.delete(old_person)
+
+        db.add(ResponsableClasse(
+            user_id=user_id,
+            classe_id=classe_id,
+            est_titulaire=est_titulaire
+        ))
+        db.commit()
+        return "", time.time(), False
+    except Exception as ex:
+        db.rollback()
+        return f"Erreur : {str(ex)}", None, True
+    finally:
+        db.close()
+
+
+# -- Modal Resp Filiere --
+@callback(
+    Output("modal-resp-filiere", "is_open"),
+    Input("btn-open-resp-filiere",   "n_clicks"),
+    Input("btn-cancel-resp-filiere", "n_clicks"),
+    Input("btn-save-resp-filiere",   "n_clicks"),
+    prevent_initial_call=True
+)
+def toggle_modal_rf(o, c, s):
+    return ctx.triggered_id == "btn-open-resp-filiere"
 
 
 @callback(
@@ -785,61 +1050,59 @@ def toggle_modal_classe(o, c, s):
 
 
 @callback(
-    Output("user-affectation-container", "children"),
-    Input("user-role", "value")
-)
-def show_affectation(role):
-    if role == "resp_classe":
-        return field("Classe", dcc.Dropdown(
-            id="user-affectation", options=get_classes(),
-            placeholder="Selectionner une classe",
-            style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"}
-        ))
-    elif role == "resp_filiere":
-        return field("Filiere", dcc.Dropdown(
-            id="user-affectation", options=get_filieres(),
-            placeholder="Selectionner une filiere",
-            style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"}
-        ))
-    return html.Div(dcc.Dropdown(id="user-affectation", style={"display": "none"}))
-
-
-@callback(
-    Output("admin-add-user-feedback", "children"),
-    Output("admin-refresh",           "data"),
-    Output("modal-add-user",          "is_open", allow_duplicate=True),
-    Input("btn-save-user",            "n_clicks"),
-    State("user-nom",        "value"),
-    State("user-prenom",     "value"),
-    State("user-email",      "value"),
-    State("user-role",       "value"),
-    State("user-affectation","value"),
-    State("user-password",   "value"),
+    Output("rf-feedback",        "children"),
+    Output("admin-refresh",      "data", allow_duplicate=True),
+    Output("modal-resp-filiere", "is_open", allow_duplicate=True),
+    Input("btn-save-resp-filiere", "n_clicks"),
+    State("rf-nom",      "value"),
+    State("rf-prenom",   "value"),
+    State("rf-email",    "value"),
+    State("rf-filiere",  "value"),
+    State("rf-password", "value"),
     prevent_initial_call=True
 )
-def save_user(n, nom, prenom, email, role, affectation, password):
-    if not all([nom, prenom, email, role, password]):
-        return "Tous les champs sont obligatoires.", None, True
-    if len(password) < 6:
-        return "Le mot de passe doit faire au moins 6 caracteres.", None, True
+def save_resp_filiere(n, nom, prenom, email, filiere_id, password):
+    if not all([nom, prenom, email, filiere_id]):
+        return "Nom, prénom, email et filière sont obligatoires.", None, True
     db = SessionLocal()
     try:
-        if db.query(User).filter(User.email == email).first():
-            return f"Email '{email}' deja utilise.", None, True
-        user = User(
-            nom=nom.upper(), prenom=prenom, email=email,
-            password_hash=hash_password(password),
-            role=RoleEnum(role), is_active=True,
-            created_at=datetime.now()
-        )
-        db.add(user)
-        db.flush()
-        if role == "resp_classe" and affectation:
-            db.add(ResponsableClasse(user_id=user.id, classe_id=affectation))
-        elif role == "resp_filiere" and affectation:
-            db.add(ResponsableFiliere(user_id=user.id, filiere_id=affectation))
+        user = db.query(User).filter(User.email == email.strip().lower()).first()
+
+        if user:
+            # Utilisateur existant (ex-etudiant) → on le promeut simplement
+            user.role      = RoleEnum.resp_filiere
+            user.is_active = True
+            # Mettre a jour nom/prenom si fournis
+            if nom:    user.nom    = nom.upper()
+            if prenom: user.prenom = prenom
+            # Changer le mot de passe seulement si fourni
+            if password and len(password) >= 6:
+                user.password_hash = hash_password(password)
+        else:
+            # Nouvel utilisateur — mot de passe obligatoire
+            if not password or len(password) < 6:
+                return "Mot de passe obligatoire (min. 6 caractères) pour un nouvel utilisateur.", None, True
+            user = User(
+                nom           = nom.upper(),
+                prenom        = prenom,
+                email         = email.strip().lower(),
+                password_hash = hash_password(password),
+                role          = RoleEnum.resp_filiere,
+                is_active     = True,
+            )
+            db.add(user)
+            db.flush()
+
+        # Supprimer ancienne affectation filiere si existe
+        old = db.query(ResponsableFiliere).filter(
+            ResponsableFiliere.user_id == user.id
+        ).first()
+        if old:
+            db.delete(old)
+
+        db.add(ResponsableFiliere(user_id=user.id, filiere_id=filiere_id))
         db.commit()
-        return "", True, False
+        return "", time.time(), False
     except Exception as ex:
         db.rollback()
         return f"Erreur : {str(ex)}", None, True
@@ -862,11 +1125,20 @@ def save_filiere(n, code, libelle, duree):
         return "Tous les champs sont obligatoires.", None, True
     db = SessionLocal()
     try:
-        if db.query(Filiere).filter(Filiere.code == code).first():
-            return f"Code '{code}' deja utilise.", None, True
-        db.add(Filiere(code=code, libelle=libelle, duree_ans=int(duree)))
+        existing = db.query(Filiere).filter(Filiere.code == code.strip().upper()).first()
+        if existing:
+            # Mise a jour au lieu de doublon
+            existing.libelle   = libelle.strip()
+            existing.duree_ans = int(duree)
+            db.commit()
+            return "", time.time(), False
+        db.add(Filiere(
+            code      = code.strip().upper(),
+            libelle   = libelle.strip(),
+            duree_ans = int(duree)
+        ))
         db.commit()
-        return "", True, False
+        return "", time.time(), False
     except Exception as ex:
         db.rollback()
         return f"Erreur : {str(ex)}", None, True
@@ -890,12 +1162,24 @@ def save_classe(n, nom, filiere_id, niveau, annee):
         return "Tous les champs sont obligatoires.", None, True
     db = SessionLocal()
     try:
+        existing = db.query(Classe).filter(
+            Classe.nom            == nom.strip(),
+            Classe.annee_scolaire == annee.strip()
+        ).first()
+        if existing:
+            # Mise a jour au lieu de doublon
+            existing.filiere_id     = filiere_id
+            existing.niveau         = int(niveau)
+            db.commit()
+            return "", time.time(), False
         db.add(Classe(
-            nom=nom, filiere_id=filiere_id,
-            niveau=int(niveau), annee_scolaire=annee
+            nom            = nom.strip(),
+            filiere_id     = filiere_id,
+            niveau         = int(niveau),
+            annee_scolaire = annee.strip()
         ))
         db.commit()
-        return "", True, False
+        return "", time.time(), False
     except Exception as ex:
         db.rollback()
         return f"Erreur : {str(ex)}", None, True
@@ -918,7 +1202,7 @@ def toggle_user(n_clicks):
         if u:
             u.is_active = not u.is_active
             db.commit()
-        return True
+        return time.time()
     finally:
         db.close()
 

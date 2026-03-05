@@ -7,9 +7,11 @@
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from models import Base
+import os
 
 # ── Configuration ─────────────────────────────────────────────
 DATABASE_URL = "sqlite:///data/sga_ensae.db"
+DB_PATH      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "sga_ensae.db")
 # Pour PostgreSQL (production) :
 # DATABASE_URL = "postgresql://user:password@localhost/sga_ensae"
 

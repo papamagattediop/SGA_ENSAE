@@ -1,238 +1,154 @@
 # ============================================================
 #  SGA ENSAE — components/navbar.py
-#  Barre de navigation avec icones Material Symbols
+#  Navbar avec menus déroulants CSS pur, sans callbacks
 #  Python 3.11 · Dash 2.17.0
 # ============================================================
 
-import dash_bootstrap_components as dbc
 from dash import html
 
 BLEU  = "#003580"
 VERT  = "#006B3F"
 OR    = "#F5A623"
-BLANC = "#FFFFFF"
 
 
-def icon(name: str, size: str = "20px") -> html.Span:
+
+# ============================================================
+#  HELPERS
+# ============================================================
+
+def mi(name, color=None):
+    s = {}
+    if color: s["color"] = color
+    return html.Span(name, className="mi", style=s)
+
+def sga_link(label, href, icon_name):
+    return html.Li(
+        html.A([mi(icon_name), label], href=href, className="sga-link"),
+        style={"listStyle": "none"}
+    )
+
+def sga_dropdown(trigger_label, trigger_icon, items, accent=OR):
     """
-    Retourne une icone Material Symbols.
-    Utilisation : icon("dashboard"), icon("school"), icon("logout")
-    Voir toutes les icones : https://fonts.google.com/icons
+    items : liste de tuples (label, href, icon) ou "---" ou "## Titre"
     """
-    return html.Span(
-        name,
-        className="material-symbols-outlined",
-        style={
-            "fontSize"     : size,
-            "verticalAlign": "middle",
-            "lineHeight"   : "1",
-        }
-    )
+    menu = []
+    for it in items:
+        if it == "---":
+            menu.append(html.Li(html.Div(className="sga-sep")))
+        elif isinstance(it, str) and it.startswith("##"):
+            menu.append(html.Li(html.Div(it[2:].strip(), className="sga-grp")))
+        else:
+            lbl, href, ico = it[0], it[1], it[2]
+            menu.append(html.Li(
+                html.A([mi(ico, accent), html.Span(lbl)],
+                       href=href, className="sga-dd-item")
+            ))
+
+    return html.Li([
+        html.Div([
+            mi(trigger_icon),
+            html.Span(trigger_label),
+            html.Span("expand_more", className="chv mi")
+        ], className="sga-dd-btn"),
+        html.Ul(menu, className="sga-dd-menu")
+    ], className="sga-dd")
 
 
-def logo_ensae() -> html.Div:
-    """Logo ENSAE depuis assets/img/logo_ensae.png avec style."""
-    return html.Div(
-        style={"display": "flex", "alignItems": "center", "gap": "10px"},
-        children=[
-            # Logo image avec style
-            html.Div(
-                style={
-                    "display"       : "flex",
-                    "alignItems"    : "center",
-                    "justifyContent": "center",
-                    "flexShrink"    : "0",
-                },
-                children=html.Img(
-                    src="/assets/img/logo_ensae.png",
-                    style={
-                        "height"      : "44px",
-                        "width"       : "auto",
-                        "objectFit"   : "contain",
-                        "borderRadius": "8px",
-                        "padding"     : "3px",
-                        "background"  : "rgba(255,255,255,0.92)",
-                        "boxShadow"   : "0 2px 10px rgba(0,0,0,0.25), 0 0 0 1.5px rgba(245,166,35,0.5)",
-                        "transition"  : "box-shadow 0.2s",
-                    }
-                )
-            ),
-            # Texte
-            html.Div([
-                html.Div(
-                    "SGA ENSAE",
-                    style={
-                        "fontFamily"   : "'Montserrat', sans-serif",
-                        "fontWeight"   : "800",
-                        "fontSize"     : "0.95rem",
-                        "color"        : BLANC,
-                        "lineHeight"   : "1.1",
-                        "letterSpacing": "0.5px",
-                    }
-                ),
-                html.Div(
-                    "Gestion Academique",
-                    style={
-                        "fontFamily": "'Inter', sans-serif",
-                        "fontSize"  : "0.62rem",
-                        "color"     : "rgba(255,255,255,0.6)",
-                        "fontWeight": "400",
-                    }
-                ),
-            ])
-        ]
-    )
+# ============================================================
+#  NAVBAR
+# ============================================================
 
-
-def nav_link(label: str, href: str, icon_name: str) -> dbc.NavItem:
-    """Genere un lien de navigation avec icone."""
-    return dbc.NavItem(
-        dbc.NavLink(
-            html.Span(
-                [icon(icon_name), html.Span(label, style={"marginLeft": "6px"})],
-                style={"display": "flex", "alignItems": "center"}
-            ),
-            href=href,
-            active="exact",
-            style={
-                "color"        : "rgba(255,255,255,0.82)",
-                "padding"      : "7px 13px",
-                "borderRadius" : "6px",
-                "fontFamily"   : "'Inter', sans-serif",
-                "fontSize"     : "0.85rem",
-                "transition"   : "background 0.2s",
-                "display"      : "flex",
-                "alignItems"   : "center",
-            }
-        )
-    )
-
+ROLE_LABELS = {
+    "admin":        "Administrateur",
+    "resp_filiere": "Resp. Filière",
+    "resp_classe":  "Délégué / Resp. Classe",
+    "eleve":        "Étudiant",
+}
 
 def create_navbar(session: dict) -> html.Div:
-    """Genere la navbar complete selon le role connecte."""
+    role      = session.get("role",   "")
+    prenom    = session.get("prenom", "")
+    nom       = session.get("nom",    "")
+    initiales = (prenom[0] + nom[0]).upper() if prenom and nom else "?"
 
-    role   = session.get("role", "")
-    prenom = session.get("prenom", "")
-    nom    = session.get("nom", "")
+    nav_items = []
 
-    # -- Liens selon role --
-    links = [nav_link("Tableau de bord", "/dashboard", "dashboard")]
+    # ── Dashboard ────────────────────────────────────────────
+    nav_items.append(sga_link("Accueil", "/dashboard", "dashboard"))
 
+    # ── Pédagogie ────────────────────────────────────────────
     if role in ("admin", "resp_filiere", "resp_classe"):
-        links += [
-            nav_link("Cours et UE",  "/cours",      "menu_book"),
-            nav_link("Seances",      "/seances",    "calendar_today"),
-            nav_link("Etudiants",    "/etudiants",  "school"),
-            nav_link("Planning",     "/planning",   "event_note"),
-            nav_link("Bulletins",    "/bulletins",  "description"),
-        ]
+        nav_items.append(sga_dropdown(
+            "Pédagogie", "menu_book",
+            [
+                ("Cours & UE",   "/cours",    "library_books"),
+                ("Séances",      "/seances",  "calendar_today"),
+                ("Planning",     "/planning", "event_note"),
+            ],
+            accent=VERT
+        ))
 
+    # ── Étudiants ────────────────────────────────────────────
+    if role in ("admin", "resp_filiere", "resp_classe"):
+        nav_items.append(sga_dropdown(
+            "Étudiants", "school",
+            [
+                ("Gestion",      "/etudiants",   "people"),
+                ("Bulletins",    "/bulletins",   "description"),
+            ],
+            accent=VERT
+        ))
+
+    # ── Analyses ─────────────────────────────────────────────
     if role in ("admin", "resp_filiere"):
-        links.append(nav_link("Statistiques", "/statistiques", "bar_chart"))
+        nav_items.append(sga_link("Statistiques", "/statistiques", "bar_chart"))
 
+    # ── Administration ───────────────────────────────────────
     if role == "admin":
-        links.append(nav_link("Administration", "/admin", "manage_accounts"))
+        nav_items.append(sga_dropdown(
+            "Admin", "manage_accounts",
+            [
+                "## Gestion",
+                ("Utilisateurs & Rôles",  "/admin", "supervisor_account"),
+                ("Base de données",       "/db",    "database"),
+                "---",
+                "## Données",
+                ("Migration Excel",       "/admin", "upload_file"),
+                ("Filières & Classes",    "/admin", "account_tree"),
+            ],
+            accent=OR
+        ))
 
-    # -- Badge utilisateur connecte --
-    initiales = f"{prenom[0]}{nom[0]}" if prenom and nom else "?"
+    # ── Zone utilisateur ─────────────────────────────────────
+    user_zone = html.Div([
+        html.Div(initiales, className="sga-avatar"),
+        html.Div([
+            html.Div(f"{prenom} {nom}",             className="sga-uname"),
+            html.Div(ROLE_LABELS.get(role, role),   className="sga-urole"),
+        ]),
+        # Menu user déroulant au hover
+        html.Div([
+            html.Div([
+                html.Div(f"{prenom} {nom}",                 className="sga-user-fullname"),
+                html.Div(ROLE_LABELS.get(role, role),       className="sga-user-rolelbl"),
+            ], className="sga-user-header"),
+            html.A([mi("logout"), "Déconnexion"], href="/", className="sga-logout")
+        ], className="sga-user-menu")
+    ], className="sga-user")
 
-    user_badge = dbc.NavItem(
-        html.Div(
-            style={
-                "display"    : "flex",
-                "alignItems" : "center",
-                "gap"        : "10px",
-                "marginLeft" : "16px",
-                "paddingLeft": "16px",
-                "borderLeft" : "1px solid rgba(255,255,255,0.2)",
-            },
-            children=[
-                # Avatar initiales
-                html.Div(
-                    initiales,
-                    style={
-                        "width"          : "34px",
-                        "height"         : "34px",
-                        "borderRadius"   : "50%",
-                        "background"     : OR,
-                        "display"        : "flex",
-                        "alignItems"     : "center",
-                        "justifyContent" : "center",
-                        "color"          : BLEU,
-                        "fontWeight"     : "700",
-                        "fontSize"       : "0.75rem",
-                        "fontFamily"     : "'Montserrat', sans-serif",
-                        "flexShrink"     : "0",
-                    }
-                ),
-                # Nom + role
-                html.Div([
-                    html.Div(
-                        f"{prenom} {nom}",
-                        style={
-                            "color"      : BLANC,
-                            "fontSize"   : "0.8rem",
-                            "fontWeight" : "600",
-                            "fontFamily" : "'Inter', sans-serif",
-                            "lineHeight" : "1.1",
-                        }
-                    ),
-                    html.Div(
-                        role.replace("_", " ").title(),
-                        style={
-                            "color"     : OR,
-                            "fontSize"  : "0.62rem",
-                            "fontFamily": "'Inter', sans-serif",
-                        }
-                    ),
-                ]),
-                # Bouton deconnexion
-                dbc.NavLink(
-                    html.Span(
-                        [icon("logout", "18px"),
-                         html.Span("Deconnexion", style={"marginLeft": "4px", "fontSize": "0.75rem"})],
-                        style={"display": "flex", "alignItems": "center"}
-                    ),
-                    href="/",
-                    style={
-                        "color"       : "rgba(255,255,255,0.6)",
-                        "padding"     : "5px 10px",
-                        "borderRadius": "6px",
-                        "border"      : "1px solid rgba(255,255,255,0.2)",
-                        "fontFamily"  : "'Inter', sans-serif",
-                        "transition"  : "all 0.2s",
-                    }
-                )
-            ]
-        )
-    )
+    return html.Nav(className="sga-navbar", children=[
+        # Logo
+        html.A([
+            html.Img(src="/assets/img/logo_ensae.png"),
+            html.Div([
+                html.Div("SGA ENSAE",           className="sga-logo-title"),
+                html.Div("Gestion Académique",  className="sga-logo-sub"),
+            ])
+        ], href="/dashboard", className="sga-logo"),
 
-    links.append(user_badge)
+        # Navigation
+        html.Ul(nav_items, className="sga-nav"),
 
-    return html.Div([
-        dbc.Navbar(
-            dbc.Container([
-                dbc.NavbarBrand(logo_ensae(), href="/dashboard"),
-                dbc.NavbarToggler(id="navbar-toggler", n_clicks=0),
-                dbc.Collapse(
-                    dbc.Nav(
-                        links,
-                        navbar=True,
-                        className="ms-auto",
-                        style={"alignItems": "center", "gap": "2px"}
-                    ),
-                    id="navbar-collapse",
-                    navbar=True,
-                    is_open=False,
-                )
-            ], fluid=True),
-            style={
-                "background"  : f"linear-gradient(135deg, {BLEU} 0%, #002060 100%)",
-                "borderBottom": f"3px solid {OR}",
-                "padding"     : "6px 0",
-                "boxShadow"   : "0 2px 12px rgba(0,53,128,0.3)",
-            },
-            dark=True,
-            sticky="top",
-        )
+        # Utilisateur
+        user_zone,
     ])

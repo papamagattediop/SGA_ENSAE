@@ -168,15 +168,19 @@ class ResponsableClasse(Base):
     """
     __tablename__ = "resp_classes"
 
-    id        = Column(Integer, primary_key=True, autoincrement=True)
-    user_id   = Column(Integer, ForeignKey("users.id"), nullable=False)
-    classe_id = Column(Integer, ForeignKey("classes.id"), nullable=False)
+    id             = Column(Integer, primary_key=True, autoincrement=True)
+    user_id        = Column(Integer, ForeignKey("users.id"), nullable=False)
+    classe_id      = Column(Integer, ForeignKey("classes.id"), nullable=False)
+    est_titulaire  = Column(Boolean, default=True, nullable=False)
+    # True  = Delegue titulaire
+    # False = Delegue suppleant
 
     user   = relationship("User", back_populates="resp_classes")
     classe = relationship("Classe", back_populates="responsables")
 
     def __repr__(self):
-        return f"<RespClasse user={self.user_id} classe={self.classe_id}>"
+        role = "Titulaire" if self.est_titulaire else "Suppleant"
+        return f"<RespClasse user={self.user_id} classe={self.classe_id} [{role}]>"
 
 
 # ════════════════════════════════════════════════════════════
