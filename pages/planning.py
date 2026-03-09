@@ -22,19 +22,59 @@ BLEU = "#003580"
 VERT = "#006B3F"
 OR   = "#F5A623"
 
-JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]
+JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
 
 
 # ============================================================
 #  UTILITAIRES DB
 # ============================================================
 
+def get_classes_for_user(role: str, user_id: int) -> list:
+    """
+    Retourne les classes accessibles selon le rôle :
+    - admin         → toutes les classes
+    - resp_filiere  → classes de sa filière
+    - resp_classe   → uniquement sa/ses classe(s)
+    """
+    db = SessionLocal()
+    try:
+        if role == "admin":
+            classes = db.query(Classe).order_by(Classe.nom).all()
+
+        elif role == "resp_filiere":
+            rf = db.query(ResponsableFiliere).filter(
+                ResponsableFiliere.user_id == user_id
+            ).all()
+            filiere_ids = [r.filiere_id for r in rf]
+            classes = db.query(Classe).filter(
+                Classe.filiere_id.in_(filiere_ids)
+            ).order_by(Classe.nom).all()
+
+        elif role == "resp_classe":
+            rc = db.query(ResponsableClasse).filter(
+                ResponsableClasse.user_id == user_id
+            ).all()
+            classe_ids = [r.classe_id for r in rc]
+            classes = db.query(Classe).filter(
+                Classe.id.in_(classe_ids)
+            ).order_by(Classe.nom).all()
+
+        else:
+            classes = []
+
+        return [{"label": c.nom, "value": c.id} for c in classes]
+    finally:
+        db.close()
+
+
 def get_classes():
+    """Toutes les classes — utilisé uniquement en admin."""
     db = SessionLocal()
     try:
         return [{"label": c.nom, "value": c.id} for c in db.query(Classe).all()]
     finally:
         db.close()
+
 
 def get_modules_by_classe(classe_id):
     db = SessionLocal()
@@ -46,25 +86,60 @@ def get_modules_by_classe(classe_id):
     finally:
         db.close()
 
+
 def get_plannings(role, user_id, filtre_statut=None):
+    """
+    Retourne les plannings filtrés selon le rôle :
+    - admin         → tous les plannings
+    - resp_filiere  → plannings des classes de sa filière
+    - resp_classe   → plannings de ses classes uniquement
+    """
     db = SessionLocal()
     try:
         q = db.query(Planning)
+
         if role == "resp_classe":
-            q = q.filter(Planning.created_by == user_id)
+            # Récupérer les IDs de classes du resp. de classe
+            rc_classes = db.query(ResponsableClasse).filter(
+                ResponsableClasse.user_id == user_id
+            ).all()
+            classe_ids = [rc.classe_id for rc in rc_classes]
+            # Plannings qui concernent au moins une de ses classes
+            q = q.join(PlanningClasse).filter(
+                PlanningClasse.classe_id.in_(classe_ids)
+            )
+
+        elif role == "resp_filiere":
+            # Récupérer les IDs de filières du resp. de filière
+            rf_list = db.query(ResponsableFiliere).filter(
+                ResponsableFiliere.user_id == user_id
+            ).all()
+            filiere_ids = [rf.filiere_id for rf in rf_list]
+            # Classes de ces filières
+            classe_ids = [
+                c.id for c in db.query(Classe).filter(
+                    Classe.filiere_id.in_(filiere_ids)
+                ).all()
+            ]
+            # Plannings qui concernent au moins une de ces classes
+            q = q.join(PlanningClasse).filter(
+                PlanningClasse.classe_id.in_(classe_ids)
+            )
+
         if filtre_statut and filtre_statut != "tous":
             q = q.filter(Planning.statut == filtre_statut)
-        plannings = q.order_by(Planning.semaine.desc()).all()
+
+        plannings = q.order_by(Planning.semaine.desc()).distinct().all()
         result = []
         for p in plannings:
-            classes  = [pc.classe.nom for pc in p.planning_classes if pc.classe]
-            seances  = p.planning_seances
+            classes = [pc.classe.nom for pc in p.planning_classes if pc.classe]
+            seances = p.planning_seances
             result.append({
-                "id"       : p.id,
-                "semaine"  : p.semaine.strftime("%d/%m/%Y") if p.semaine else "-",
-                "statut"   : p.statut.value if p.statut else "-",
-                "classes"  : ", ".join(classes),
-                "nb_seances": len(seances),
+                "id"         : p.id,
+                "semaine"    : p.semaine.strftime("%d/%m/%Y") if p.semaine else "-",
+                "statut"     : p.statut.value if p.statut else "-",
+                "classes"    : ", ".join(classes),
+                "nb_seances" : len(seances),
                 "commentaire": p.commentaire or "",
                 "created_by" : p.created_by,
                 "created_at" : p.created_at.strftime("%d/%m/%Y") if p.created_at else "-",
@@ -72,6 +147,7 @@ def get_plannings(role, user_id, filtre_statut=None):
         return result
     finally:
         db.close()
+
 
 def get_planning_detail(planning_id):
     db = SessionLocal()
@@ -83,6 +159,7 @@ def get_planning_detail(planning_id):
         for s in p.planning_seances:
             seances.append({
                 "module"     : s.module.libelle if s.module else "-",
+                "enseignant" : s.module.enseignant if s.module and s.module.enseignant else "",
                 "code"       : s.module.code if s.module else "-",
                 "date"       : s.date.strftime("%d/%m/%Y") if s.date else "-",
                 "heure_debut": s.heure_debut.strftime("%H:%M") if s.heure_debut else "-",
@@ -102,13 +179,14 @@ def get_planning_detail(planning_id):
     finally:
         db.close()
 
+
 def get_resp_filiere_email(classe_id):
-    """Retourne l'email du responsable de filiere d'une classe."""
+    """Retourne (email, nom) du responsable de filière d'une classe."""
     db = SessionLocal()
     try:
         classe = db.query(Classe).filter(Classe.id == classe_id).first()
         if not classe:
-            return None
+            return None, None
         resp = db.query(ResponsableFiliere).filter(
             ResponsableFiliere.filiere_id == classe.filiere_id
         ).first()
@@ -118,17 +196,49 @@ def get_resp_filiere_email(classe_id):
     finally:
         db.close()
 
-def get_resp_classe_email(planning_id):
-    """Retourne l'email du responsable de classe qui a cree le planning."""
+
+def get_resp_classe_emails(planning_id) -> list:
+    """
+    Retourne la liste de (email, nom) à notifier côté resp. de classe :
+    - Le délégué titulaire de chaque classe liée au planning
+    - Le créateur du planning (si rôle resp_classe et pas déjà dans la liste)
+    Dédupliqué par email.
+    """
     db = SessionLocal()
     try:
         p = db.query(Planning).filter(Planning.id == planning_id).first()
-        if not p or not p.created_by_user:
-            return None, None
-        u = p.created_by_user
-        return u.email, f"{u.prenom} {u.nom}"
+        if not p:
+            return []
+
+        destinataires = {}  # email -> nom
+
+        # 1. Délégués titulaires des classes du planning
+        for pc in p.planning_classes:
+            if not pc.classe:
+                continue
+            resp = db.query(ResponsableClasse).filter(
+                ResponsableClasse.classe_id     == pc.classe.id,
+                ResponsableClasse.est_titulaire == True
+            ).first()
+            if resp and resp.user and resp.user.email:
+                destinataires[resp.user.email] = f"{resp.user.prenom} {resp.user.nom}"
+
+        # 2. Créateur du planning (si resp_classe et pas déjà présent)
+        if p.created_by_user and p.created_by_user.role.value == "resp_classe":
+            u = p.created_by_user
+            if u.email not in destinataires:
+                destinataires[u.email] = f"{u.prenom} {u.nom}"
+
+        return list(destinataires.items())   # [(email, nom), ...]
     finally:
         db.close()
+
+
+def get_resp_classe_email(planning_id):
+    """Compatibilité : retourne (email, nom) du premier destinataire resp. de classe."""
+    results = get_resp_classe_emails(planning_id)
+    return results[0] if results else (None, None)
+
 
 def prochain_lundi():
     """Retourne la date du prochain lundi."""
@@ -140,6 +250,77 @@ def prochain_lundi():
 
 
 # ============================================================
+#  HELPERS EMAIL
+# ============================================================
+
+def _get_seances_list(planning) -> list:
+    """
+    Construit la liste de dicts de séances depuis un objet Planning ORM.
+    Doit être appelé pendant que la session est encore active.
+    """
+    seances = []
+    for s in sorted(planning.planning_seances,
+                    key=lambda x: (x.date, x.heure_debut)):
+        seances.append({
+            "module"     : s.module.libelle if s.module else "-",
+            "enseignant" : s.module.enseignant if s.module and s.module.enseignant else "",
+            "date"       : s.date.strftime("%d/%m/%Y") if s.date else "-",
+            "jour"       : JOURS[s.date.weekday()] if s.date else "-",
+            "heure_debut": s.heure_debut.strftime("%H:%M") if s.heure_debut else "-",
+            "heure_fin"  : s.heure_fin.strftime("%H:%M") if s.heure_fin else "-",
+        })
+    return seances
+
+
+def _notifier_professeurs(seances_list: list, classe_n: str, semaine: str) -> None:
+    """
+    Envoie un email individuel à chaque enseignant présent dans le planning.
+    Reçoit directement la liste de dicts (déjà construite pendant la session ORM).
+    """
+    from utils.mailer import email_planning_prof
+
+    # Regrouper par enseignant
+    profs: dict[str, list] = {}
+    for s in seances_list:
+        nom_prof = (s.get("enseignant") or "").strip()
+        if not nom_prof:
+            continue
+        profs.setdefault(nom_prof, []).append(s)
+
+    if not profs:
+        return
+
+    # Chercher les emails dans la table users par correspondance nom/prénom
+    db = SessionLocal()
+    try:
+        all_users = db.query(User).filter(User.is_active == True).all()
+        user_email_map: dict[str, tuple[str, str]] = {}
+        for u in all_users:
+            full1 = f"{u.prenom} {u.nom}".strip().lower()
+            full2 = f"{u.nom} {u.prenom}".strip().lower()
+            display = f"{u.prenom} {u.nom}".strip()
+            user_email_map[full1] = (u.email, display)
+            user_email_map[full2] = (u.email, display)
+
+        for nom_prof, seances_prof in profs.items():
+            match = user_email_map.get(nom_prof.strip().lower())
+            if match:
+                email_prof, display = match
+                try:
+                    email_planning_prof(
+                        to           = email_prof,
+                        nom_prof     = display,
+                        classe       = classe_n,
+                        semaine      = semaine,
+                        seances_prof = seances_prof,
+                    )
+                except Exception:
+                    pass   # ne jamais bloquer le workflow pour un email raté
+    finally:
+        db.close()
+
+
+# ============================================================
 #  COMPOSANTS UI
 # ============================================================
 
@@ -147,9 +328,9 @@ def statut_badge(statut: str) -> html.Span:
     configs = {
         "brouillon": ("#6b7280", "#f3f4f6", "Brouillon"),
         "soumis"   : (BLEU,     "#dbeafe",  "Soumis"),
-        "modifie"  : ("#d97706", "#fef3c7", "Modifie"),
-        "valide"   : (VERT,     "#d1fae5",  "Valide"),
-        "rejete"   : ("#ef4444", "#fee2e2",  "Rejete"),
+        "modifie"  : ("#d97706", "#fef3c7", "Modifié"),
+        "valide"   : (VERT,     "#d1fae5",  "Validé"),
+        "rejete"   : ("#ef4444", "#fee2e2",  "Rejeté"),
     }
     color, bg, label = configs.get(statut, ("#6b7280", "#f3f4f6", statut))
     return html.Span(label, style={
@@ -159,11 +340,13 @@ def statut_badge(statut: str) -> html.Span:
         "fontFamily"  : "'Inter', sans-serif"
     })
 
+
 def label_style():
     return {
         "fontWeight": "600", "fontSize": "0.82rem", "color": "#374151",
         "marginBottom": "6px", "display": "block", "fontFamily": "'Inter', sans-serif"
     }
+
 
 def input_style():
     return {
@@ -171,11 +354,13 @@ def input_style():
         "fontSize": "0.875rem", "fontFamily": "'Inter', sans-serif"
     }
 
+
 def field(label_text, component):
     return html.Div(style={"marginBottom": "14px"}, children=[
         html.Label(label_text, style=label_style()),
         component
     ])
+
 
 def btn_primary(label, btn_id, color=BLEU):
     return html.Button(label, id=btn_id, n_clicks=0, style={
@@ -184,6 +369,7 @@ def btn_primary(label, btn_id, color=BLEU):
         "fontFamily": "'Montserrat', sans-serif", "fontWeight": "600",
         "fontSize": "0.82rem", "cursor": "pointer"
     })
+
 
 def btn_outline(label, btn_id, color="#6b7280"):
     return html.Button(label, id=btn_id, n_clicks=0, style={
@@ -202,8 +388,10 @@ layout = html.Div([
     dcc.Store(id="planning-selectionne"),
     dcc.Store(id="planning-refresh"),
     dcc.Store(id="planning-session"),
+    # Store pour l'id du planning sélectionné — doit être dans le layout statique
+    dcc.Store(id="planning-detail-id", data=None),
 
-    # -- Retour + En-tete --
+    # -- Retour + En-tête --
     html.Div(style={"marginBottom": "24px"}, children=[
         html.A(href="/dashboard", style={
             "textDecoration": "none", "display": "inline-flex",
@@ -239,29 +427,28 @@ layout = html.Div([
                     {"label": "Tous",      "value": "tous"},
                     {"label": "Brouillon", "value": "brouillon"},
                     {"label": "Soumis",    "value": "soumis"},
-                    {"label": "Valide",    "value": "valide"},
-                    {"label": "Rejete",    "value": "rejete"},
-                    {"label": "Modifie",   "value": "modifie"},
+                    {"label": "Validé",    "value": "valide"},
+                    {"label": "Rejeté",    "value": "rejete"},
+                    {"label": "Modifié",   "value": "modifie"},
                 ],
                 value="tous",
                 style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"}
             )
         ]),
-        html.Div(id="planning-btn-container")
+        html.Div(
+            id="planning-btn-container",
+            style={"display": "flex", "gap": "8px"}
+        ),
     ]),
 
-    # -- Feedback --
-    html.Div(id="planning-feedback", style={"marginBottom": "12px"}),
-
     # -- Contenu principal --
-    dbc.Row(style={"alignItems": "stretch"}, children=[
-
-        # Liste plannings
+    dbc.Row([
+        # Colonne liste
         dbc.Col(
             html.Div(style={
                 "background": "#ffffff", "borderRadius": "12px",
                 "padding": "20px", "border": "1px solid #e5e7eb",
-                "height": "100%", "display": "flex", "flexDirection": "column"
+                "height": "100%"
             }, children=[
                 html.Div(style={
                     "display": "flex", "justifyContent": "space-between",
@@ -272,37 +459,42 @@ layout = html.Div([
                         "fontWeight": "700", "color": BLEU, "margin": "0"
                     }),
                     html.Span(id="planning-nb", style={
-                        "background": f"{BLEU}10", "color": BLEU,
+                        "background": f"{BLEU}15", "color": BLEU,
                         "padding": "2px 10px", "borderRadius": "999px",
-                        "fontSize": "0.72rem", "fontWeight": "700",
-                        "fontFamily": "'Montserrat', sans-serif"
-                    })
+                        "fontSize": "0.75rem", "fontWeight": "700"
+                    }),
                 ]),
-                html.Div(id="planning-liste",
-                         style={"flex": "1", "overflowY": "auto", "maxHeight": "560px"})
+                html.Div(id="planning-liste"),
             ]),
-            md=5
+            md=4
         ),
-
-        # Detail planning
+        # Colonne détail
         dbc.Col(
             html.Div(style={
                 "background": "#ffffff", "borderRadius": "12px",
                 "padding": "20px", "border": "1px solid #e5e7eb",
-                "height": "100%", "display": "flex", "flexDirection": "column"
+                "height": "100%"
             }, children=[
-                html.H6("Detail du planning", style={
-                    "fontFamily": "'Montserrat', sans-serif",
-                    "fontWeight": "700", "color": BLEU, "marginBottom": "14px"
-                }),
-                html.Div(id="planning-detail",
-                         style={"flex": "1", "overflowY": "auto", "maxHeight": "560px"})
+                html.Div(id="planning-detail", children=[
+                    html.P("Sélectionnez un planning pour voir le détail.", style={
+                        "color": "#9ca3af", "fontFamily": "'Inter', sans-serif",
+                        "fontSize": "0.875rem", "textAlign": "center", "padding": "40px 0"
+                    })
+                ]),
+                # Zone boutons d'action (visible dynamiquement)
+                html.Div(id="planning-actions-container", style={"display": "none"}, children=[
+                    html.Button("Valider / Rejeter", id="btn-open-validation",    n_clicks=0),
+                    html.Button("Soumettre",         id="btn-soumettre-planning", n_clicks=0),
+                ]),
             ]),
-            md=7
-        )
+            md=8
+        ),
     ], className="g-3"),
 
-    # -- Modal nouveau planning --
+    # -- Feedback --
+    html.Div(id="planning-feedback", style={"marginTop": "12px"}),
+
+    # -- Modal création planning --
     dbc.Modal([
         dbc.ModalHeader(dbc.ModalTitle("Proposer un planning")),
         dbc.ModalBody([
@@ -313,22 +505,22 @@ layout = html.Div([
             )),
             field("Classe(s)", dcc.Dropdown(
                 id="planning-classes",
-                placeholder="Selectionner une ou plusieurs classes",
+                placeholder="Sélectionner une ou plusieurs classes",
                 multi=True,
                 style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"}
             )),
 
             html.Hr(style={"borderColor": "#e5e7eb"}),
-            html.H6("Seances de la semaine", style={
+            html.H6("Séances de la semaine", style={
                 "fontFamily": "'Montserrat', sans-serif",
                 "fontWeight": "700", "color": BLEU, "marginBottom": "12px"
             }),
 
-            # Lignes seances dynamiques
+            # Lignes séances dynamiques
             html.Div(id="planning-seances-container"),
 
             html.Button(
-                "+ Ajouter une seance",
+                "+ Ajouter une séance",
                 id="btn-add-seance-planning",
                 n_clicks=0,
                 style={
@@ -350,7 +542,7 @@ layout = html.Div([
         ])
     ], id="modal-planning", is_open=False, size="xl"),
 
-    # -- Modal validation (resp filiere) --
+    # -- Modal validation (resp filière) --
     dbc.Modal([
         dbc.ModalHeader(dbc.ModalTitle("Valider / Rejeter le planning")),
         dbc.ModalBody([
@@ -366,12 +558,19 @@ layout = html.Div([
                      style={"color": "#ef4444", "fontSize": "0.8rem"})
         ]),
         dbc.ModalFooter([
-            btn_primary("Valider",   "btn-valider",  VERT),
-            btn_primary("Modifier",  "btn-modifier",  OR),
-            btn_primary("Rejeter",   "btn-rejeter",  "#ef4444"),
-            btn_outline("Annuler",   "btn-cancel-validation"),
+            btn_primary("Valider",  "btn-valider",  VERT),
+            btn_primary("Modifier", "btn-modifier", OR),
+            btn_primary("Rejeter",  "btn-rejeter",  "#ef4444"),
+            btn_outline("Annuler",  "btn-cancel-validation"),
         ])
     ], id="modal-validation", is_open=False, size="lg"),
+
+    # Boutons d'action statiques (cachés par défaut, rendus visibles par callback)
+    # Nécessaire car Dash exige que les Input/State existent dans le layout statique
+    html.Div(id="planning-actions-container", style={"display": "none"}, children=[
+        html.Button("Valider / Rejeter", id="btn-open-validation",    n_clicks=0),
+        html.Button("Soumettre",         id="btn-soumettre-planning", n_clicks=0),
+    ]),
 
     html.Div(id="planning-dummy", style={"display": "none"})
 ])
@@ -382,8 +581,8 @@ layout = html.Div([
 # ============================================================
 
 @callback(
-    Output("planning-session",     "data"),
-    Output("planning-btn-container","children"),
+    Output("planning-session",      "data"),
+    Output("planning-btn-container", "children"),
     Input("session-store", "data")
 )
 def init_page(session):
@@ -400,8 +599,12 @@ def init_page(session):
     Output("planning-classes", "options"),
     Input("session-store", "data")
 )
-def load_classes(_):
-    return get_classes()
+def load_classes(session):
+    if not session:
+        return []
+    role    = session.get("role", "")
+    user_id = session.get("user_id")
+    return get_classes_for_user(role, user_id)
 
 
 @callback(
@@ -428,9 +631,11 @@ def render_seances_form(nb, classes):
                 "border": "1px solid #e5e7eb", "borderRadius": "8px",
                 "padding": "12px", "marginBottom": "8px", "background": "#fafafa"
             }, children=[
-                html.Div(style={"display": "flex", "justifyContent": "space-between",
-                                "alignItems": "center", "marginBottom": "8px"}, children=[
-                    html.Span(f"Seance {i + 1}", style={
+                html.Div(style={
+                    "display": "flex", "justifyContent": "space-between",
+                    "alignItems": "center", "marginBottom": "8px"
+                }, children=[
+                    html.Span(f"Séance {i + 1}", style={
                         "fontWeight": "600", "fontSize": "0.82rem",
                         "color": BLEU, "fontFamily": "'Montserrat', sans-serif"
                     }),
@@ -446,7 +651,7 @@ def render_seances_form(nb, classes):
                         id={"type": "ps-date", "index": i},
                         type="date", style=input_style()
                     )), md=3),
-                    dbc.Col(field("Debut", dbc.Input(
+                    dbc.Col(field("Début", dbc.Input(
                         id={"type": "ps-debut", "index": i},
                         type="time", style=input_style()
                     )), md=2),
@@ -463,7 +668,7 @@ def render_seances_form(nb, classes):
 @callback(
     Output("planning-nb-seances", "data"),
     Input("btn-add-seance-planning", "n_clicks"),
-    State("planning-nb-seances",    "data"),
+    State("planning-nb-seances",     "data"),
     prevent_initial_call=True
 )
 def add_seance_row(n, nb):
@@ -471,8 +676,8 @@ def add_seance_row(n, nb):
 
 
 @callback(
-    Output("planning-liste",   "children"),
-    Output("planning-nb",      "children"),
+    Output("planning-liste", "children"),
+    Output("planning-nb",    "children"),
     Input("planning-filtre-statut", "value"),
     Input("planning-refresh",       "data"),
     Input("planning-session",       "data")
@@ -485,7 +690,7 @@ def afficher_plannings(filtre, _, session):
     plannings = get_plannings(role, user_id, filtre)
 
     if not plannings:
-        return html.P("Aucun planning trouve.", style={
+        return html.P("Aucun planning trouvé.", style={
             "color": "#9ca3af", "fontFamily": "'Inter', sans-serif",
             "fontSize": "0.875rem", "textAlign": "center", "padding": "20px"
         }), "0"
@@ -523,11 +728,11 @@ def afficher_plannings(filtre, _, session):
                         "fontSize": "0.7rem", "fontFamily": "'Inter', sans-serif",
                         "fontWeight": "500"
                     }),
-                    html.Span(f"{p['nb_seances']} seance(s)", style={
+                    html.Span(f"{p['nb_seances']} séance(s)", style={
                         "color": "#6b7280", "fontSize": "0.7rem",
                         "fontFamily": "'Inter', sans-serif"
                     }),
-                    html.Span(f"Cree le {p['created_at']}", style={
+                    html.Span(f"Créé le {p['created_at']}", style={
                         "color": "#9ca3af", "fontSize": "0.7rem",
                         "fontFamily": "'Inter', sans-serif"
                     }),
@@ -540,157 +745,139 @@ def afficher_plannings(filtre, _, session):
 
 
 @callback(
-    Output("planning-detail", "children"),
+    Output("planning-detail",        "children"),
+    Output("planning-detail-id",     "data"),
+    Output("planning-actions-container", "style"),
+    Output("btn-open-validation",    "style"),
+    Output("btn-soumettre-planning", "style"),
     Input({"type": "planning-item", "index": dash.ALL}, "n_clicks"),
     State("planning-session", "data"),
     prevent_initial_call=True
 )
 def afficher_detail(n_clicks, session):
     if not any(n_clicks):
-        return html.Div()
+        return html.Div(), None, {"display": "none"}, {}, {}
+
     planning_id = ctx.triggered_id["index"]
     detail = get_planning_detail(planning_id)
     if not detail:
-        return html.P("Planning introuvable.")
+        return html.P("Planning introuvable."), None, {"display": "none"}, {}, {}
 
     role = session.get("role", "") if session else ""
 
-    # Grouper seances par jour
-    jours_data = {}
-    for s in detail["seances"]:
-        jour = s["jour"]
-        if jour not in jours_data:
-            jours_data[jour] = []
-        jours_data[jour].append(s)
+    # Styles des boutons selon statut et rôle
+    btn_style_base = {
+        "border": "none", "borderRadius": "8px", "padding": "8px 16px",
+        "fontFamily": "'Montserrat', sans-serif", "fontWeight": "600",
+        "fontSize": "0.82rem", "cursor": "pointer", "color": "#fff"
+    }
+    show_valider   = role in ("resp_filiere", "admin") and detail["statut"] == "soumis"
+    show_soumettre = role in ("resp_classe", "admin")  and detail["statut"] == "brouillon"
 
-    # Boutons action selon statut et role
-    action_btns = []
-    if role in ("resp_filiere", "admin") and detail["statut"] == "soumis":
-        action_btns.append(
-            html.Button("Valider / Rejeter", id="btn-open-validation", n_clicks=0,
-                        style={
-                            "background": BLEU, "color": "#fff", "border": "none",
-                            "borderRadius": "8px", "padding": "8px 16px",
-                            "fontFamily": "'Montserrat', sans-serif", "fontWeight": "600",
-                            "fontSize": "0.82rem", "cursor": "pointer"
-                        })
-        )
-    if role in ("resp_classe", "admin") and detail["statut"] == "brouillon":
-        action_btns.append(
-            html.Button("Soumettre", id="btn-soumettre-planning", n_clicks=0,
-                        style={
-                            "background": VERT, "color": "#fff", "border": "none",
-                            "borderRadius": "8px", "padding": "8px 16px",
-                            "fontFamily": "'Montserrat', sans-serif", "fontWeight": "600",
-                            "fontSize": "0.82rem", "cursor": "pointer"
-                        })
-        )
+    style_valider   = {**btn_style_base, "background": BLEU,
+                       "display": "inline-block" if show_valider else "none"}
+    style_soumettre = {**btn_style_base, "background": VERT,
+                       "display": "inline-block" if show_soumettre else "none"}
+    style_container = {"display": "flex", "gap": "8px", "marginTop": "12px"} \
+                      if (show_valider or show_soumettre) else {"display": "none"}
 
+    contenu_detail = _render_detail_content(detail)
+    return contenu_detail, planning_id, style_container, style_valider, style_soumettre
+
+
+def _render_detail_content(detail: dict):
+    """Rendu HTML du détail d'un planning (sans les boutons d'action)."""
     return html.Div([
-        # Header detail
+        # Header détail
         html.Div(style={
-            "background": f"{BLEU}08", "borderRadius": "10px",
+            "background": f"{BLEU}08", "borderRadius": "8px",
             "padding": "14px 16px", "marginBottom": "16px",
-            "border": f"1px solid {BLEU}20"
+            "display": "flex", "justifyContent": "space-between", "alignItems": "center"
         }, children=[
-            html.Div(style={
-                "display": "flex", "justifyContent": "space-between",
-                "alignItems": "center", "marginBottom": "8px"
-            }, children=[
-                html.Div([
-                    html.Span("Semaine du ", style={
-                        "color": "#9ca3af", "fontSize": "0.75rem",
-                        "fontFamily": "'Inter', sans-serif"
-                    }),
-                    html.Span(detail["semaine"], style={
-                        "fontWeight": "800", "color": BLEU,
-                        "fontSize": "1rem", "fontFamily": "'Montserrat', sans-serif"
-                    }),
-                ]),
-                statut_badge(detail["statut"])
-            ]),
-            html.Div(style={"display": "flex", "gap": "8px", "flexWrap": "wrap",
-                            "marginBottom": "8px"}, children=[
-                html.Span(c, style={
-                    "background": f"{BLEU}12", "color": BLEU,
-                    "padding": "2px 8px", "borderRadius": "4px",
-                    "fontSize": "0.72rem", "fontWeight": "600",
+            html.Div([
+                html.Span("Semaine du ", style={
+                    "color": "#9ca3af", "fontSize": "0.75rem",
                     "fontFamily": "'Inter', sans-serif"
-                }) for c in detail["classes"]
+                }),
+                html.Span(detail["semaine"], style={
+                    "fontWeight": "800", "color": BLEU,
+                    "fontFamily": "'Montserrat', sans-serif"
+                }),
+                html.Div(", ".join(detail["classes"]), style={
+                    "color": "#6b7280", "fontSize": "0.78rem",
+                    "fontFamily": "'Inter', sans-serif", "marginTop": "2px"
+                }),
             ]),
-            html.Div(action_btns, style={"display": "flex", "gap": "8px"})
+            statut_badge(detail["statut"]),
         ]),
 
-        # Commentaire si present
+        # Commentaire si présent
         html.Div(style={
             "background": "#fffbeb", "border": "1px solid #fde68a",
-            "borderRadius": "8px", "padding": "10px 14px", "marginBottom": "14px"
-        }, children=[
-            html.Span("Commentaire : ", style={
-                "fontWeight": "600", "fontSize": "0.82rem",
-                "color": "#d97706", "fontFamily": "'Montserrat', sans-serif"
-            }),
-            html.Span(detail["commentaire"], style={
-                "fontSize": "0.82rem", "color": "#374151",
-                "fontFamily": "'Inter', sans-serif"
-            })
-        ]) if detail["commentaire"] else html.Div(),
+            "borderRadius": "8px", "padding": "10px 14px", "marginBottom": "16px",
+            "fontSize": "0.82rem", "color": "#92400e",
+            "fontFamily": "'Inter', sans-serif",
+            "display": "block" if detail["commentaire"] else "none"
+        }, children=f"💬 {detail['commentaire']}"),
 
-        # Seances par jour
-        html.H6("Seances planifiees", style={
-            "fontFamily": "'Montserrat', sans-serif", "fontWeight": "700",
-            "color": BLEU, "marginBottom": "10px"
+        # Tableau séances
+        html.H6("Séances programmées", style={
+            "fontFamily": "'Montserrat', sans-serif",
+            "fontWeight": "700", "color": BLEU,
+            "fontSize": "0.85rem", "marginBottom": "10px"
         }),
 
-        html.Div([
-            html.Div(style={"marginBottom": "12px"}, children=[
-                html.Div(jour, style={
-                    "background": f"{VERT}10", "color": VERT,
-                    "padding": "4px 12px", "borderRadius": "6px",
-                    "fontWeight": "700", "fontSize": "0.78rem",
-                    "fontFamily": "'Montserrat', sans-serif", "marginBottom": "6px"
-                }),
-                html.Div([
-                    html.Div(style={
-                        "display": "grid",
-                        "gridTemplateColumns": "1fr 80px 100px",
-                        "gap": "8px", "alignItems": "center",
-                        "padding": "8px 12px", "borderRadius": "6px",
-                        "border": "1px solid #f3f4f6", "marginBottom": "4px",
-                        "background": "#ffffff"
-                    }, children=[
-                        html.Div([
-                            html.Span(s["code"], style={
-                                "background": f"{BLEU}12", "color": BLEU,
-                                "padding": "1px 6px", "borderRadius": "3px",
-                                "fontSize": "0.68rem", "fontWeight": "700",
-                                "fontFamily": "'Montserrat', sans-serif",
-                                "marginRight": "6px"
-                            }),
-                            html.Span(s["module"], style={
-                                "fontSize": "0.82rem", "color": "#374151",
-                                "fontFamily": "'Inter', sans-serif", "fontWeight": "500"
-                            })
-                        ]),
-                        html.Span(s["date"], style={
-                            "fontSize": "0.75rem", "color": "#6b7280",
-                            "fontFamily": "'Inter', sans-serif", "textAlign": "center"
-                        }),
-                        html.Span(f"{s['heure_debut']} - {s['heure_fin']}", style={
-                            "fontSize": "0.75rem", "color": "#6b7280",
-                            "fontFamily": "'Inter', sans-serif", "textAlign": "center"
-                        })
-                    ])
-                    for s in seances_jour
-                ])
-            ])
-            for jour, seances_jour in jours_data.items()
-        ]) if detail["seances"] else html.P("Aucune seance planifiee.", style={
-            "color": "#9ca3af", "fontFamily": "'Inter', sans-serif",
-            "fontSize": "0.875rem", "textAlign": "center"
-        }),
-
-        dcc.Store(id="planning-detail-id", data=planning_id)
+        html.Table(
+            style={"width": "100%", "borderCollapse": "collapse",
+                   "fontSize": "0.82rem", "fontFamily": "'Inter', sans-serif"},
+            children=[
+                html.Thead(html.Tr([
+                    html.Th("Jour",       style={"padding": "8px 10px", "textAlign": "left",
+                                                  "color": BLEU, "fontWeight": "700",
+                                                  "fontSize": "0.72rem", "textTransform": "uppercase",
+                                                  "borderBottom": "2px solid #e5e7eb"}),
+                    html.Th("Date",       style={"padding": "8px 10px", "textAlign": "left",
+                                                  "color": BLEU, "fontWeight": "700",
+                                                  "fontSize": "0.72rem", "textTransform": "uppercase",
+                                                  "borderBottom": "2px solid #e5e7eb"}),
+                    html.Th("Module",     style={"padding": "8px 10px", "textAlign": "left",
+                                                  "color": BLEU, "fontWeight": "700",
+                                                  "fontSize": "0.72rem", "textTransform": "uppercase",
+                                                  "borderBottom": "2px solid #e5e7eb"}),
+                    html.Th("Enseignant", style={"padding": "8px 10px", "textAlign": "left",
+                                                  "color": BLEU, "fontWeight": "700",
+                                                  "fontSize": "0.72rem", "textTransform": "uppercase",
+                                                  "borderBottom": "2px solid #e5e7eb"}),
+                    html.Th("Horaire",    style={"padding": "8px 10px", "textAlign": "left",
+                                                  "color": BLEU, "fontWeight": "700",
+                                                  "fontSize": "0.72rem", "textTransform": "uppercase",
+                                                  "borderBottom": "2px solid #e5e7eb"}),
+                ])),
+                html.Tbody([
+                    html.Tr(
+                        style={"borderBottom": "1px solid #f3f4f6",
+                               "background": "#fafafa" if i % 2 == 0 else "#ffffff"},
+                        children=[
+                            html.Td(s["jour"],       style={"padding": "8px 10px", "color": "#6b7280"}),
+                            html.Td(s["date"],       style={"padding": "8px 10px", "color": "#374151",
+                                                             "whiteSpace": "nowrap"}),
+                            html.Td(s["module"],     style={"padding": "8px 10px", "color": "#111827",
+                                                             "fontWeight": "500"}),
+                            html.Td(s.get("enseignant") or "—",
+                                                     style={"padding": "8px 10px", "color": "#6b7280"}),
+                            html.Td(f"{s['heure_debut']} – {s['heure_fin']}",
+                                                     style={"padding": "8px 10px", "color": "#6b7280",
+                                                             "whiteSpace": "nowrap"}),
+                        ]
+                    )
+                    for i, s in enumerate(detail["seances"])
+                ]) if detail["seances"] else html.Tbody(html.Tr(
+                    html.Td("Aucune séance enregistrée.", colSpan=5,
+                            style={"padding": "16px", "textAlign": "center",
+                                   "color": "#9ca3af", "fontStyle": "italic"})
+                ))
+            ]
+        ),
     ])
 
 
@@ -709,11 +896,11 @@ def toggle_modal_planning(o, c, b, s):
 
 @callback(
     Output("modal-validation", "is_open"),
-    Input("btn-open-validation",    "n_clicks"),
-    Input("btn-cancel-validation",  "n_clicks"),
-    Input("btn-valider",            "n_clicks"),
-    Input("btn-rejeter",            "n_clicks"),
-    Input("btn-modifier",           "n_clicks"),
+    Input("btn-open-validation",   "n_clicks"),
+    Input("btn-cancel-validation", "n_clicks"),
+    Input("btn-valider",           "n_clicks"),
+    Input("btn-rejeter",           "n_clicks"),
+    Input("btn-modifier",          "n_clicks"),
     prevent_initial_call=True
 )
 def toggle_modal_validation(o, c, v, r, m):
@@ -742,14 +929,14 @@ def save_planning(nb, ns, semaine, classes, modules, dates, debuts, fins, sessio
     if not semaine or not classes:
         return "La semaine et au moins une classe sont obligatoires.", None, True
 
-    statut = (StatutPlanningEnum.brouillon
-              if ctx.triggered_id == "btn-save-brouillon"
-              else StatutPlanningEnum.soumis)
-
     db = SessionLocal()
     try:
         from datetime import time as dtime
         semaine_date = datetime.strptime(semaine, "%Y-%m-%d").date()
+        statut = (StatutPlanningEnum.brouillon
+                  if ctx.triggered_id == "btn-save-brouillon"
+                  else StatutPlanningEnum.soumis)
+
         planning = Planning(
             semaine    = semaine_date,
             statut     = statut,
@@ -764,7 +951,7 @@ def save_planning(nb, ns, semaine, classes, modules, dates, debuts, fins, sessio
         for cid in classes:
             db.add(PlanningClasse(planning_id=planning.id, classe_id=cid))
 
-        # Seances
+        # Séances
         for mod, dat, deb, fin in zip(modules, dates, debuts, fins):
             if not all([mod, dat, deb, fin]):
                 continue
@@ -778,25 +965,42 @@ def save_planning(nb, ns, semaine, classes, modules, dates, debuts, fins, sessio
 
         db.commit()
 
-        # Envoyer email si soumis
+        # Envoyer emails si soumis
         if statut == StatutPlanningEnum.soumis and classes:
             try:
-                from utils.mailer import email_planning_soumis
+                from utils.mailer import email_planning_soumis, email_planning_confirmation_rc
+
+                # Recharger le planning avec ses relations pour construire les séances
+                db.refresh(planning)
+                seances_list = _get_seances_list(planning)
+
+                user     = db.query(User).filter(User.id == session.get("user_id")).first()
+                nom_rc   = f"{user.prenom} {user.nom}" if user else "Responsable"
+                classe_n = db.query(Classe).filter(Classe.id == classes[0]).first()
+                nom_classe = classe_n.nom if classe_n else "-"
+                semaine_str = semaine_date.strftime("%d/%m/%Y")
+
+                # Email au resp. filière
                 email_resp, nom_resp = get_resp_filiere_email(classes[0])
                 if email_resp:
-                    user = db.query(User).filter(
-                        User.id == session.get("user_id")
-                    ).first()
-                    nom_rc   = f"{user.prenom} {user.nom}" if user else "Responsable"
-                    classe_n = db.query(Classe).filter(Classe.id == classes[0]).first()
                     email_planning_soumis(
                         to               = email_resp,
                         nom_resp_filiere = nom_resp,
                         nom_resp_classe  = nom_rc,
-                        classe           = classe_n.nom if classe_n else "-",
-                        semaine          = semaine_date.strftime("%d/%m/%Y"),
-                        seances          = [],
-                        planning_id      = planning.id
+                        classe           = nom_classe,
+                        semaine          = semaine_str,
+                        seances          = seances_list,
+                        planning_id      = planning.id,
+                    )
+
+                # Email de confirmation au resp. de classe (créateur)
+                if user and user.email:
+                    email_planning_confirmation_rc(
+                        to          = user.email,
+                        nom_rc      = nom_rc,
+                        classe      = nom_classe,
+                        semaine     = semaine_str,
+                        seances     = seances_list,
                     )
             except Exception:
                 pass
@@ -811,22 +1015,19 @@ def save_planning(nb, ns, semaine, classes, modules, dates, debuts, fins, sessio
 
 
 @callback(
-    Output("validation-feedback",  "children"),
-    Output("planning-refresh",     "data", allow_duplicate=True),
-    Output("modal-validation",     "is_open", allow_duplicate=True),
-    Input("btn-valider",           "n_clicks"),
-    Input("btn-rejeter",           "n_clicks"),
-    Input("btn-modifier",          "n_clicks"),
-    State("validation-commentaire","value"),
-    State("planning-detail-id",    "data"),
-    State("planning-session",      "data"),
+    Output("validation-feedback", "children"),
+    Output("planning-refresh",    "data", allow_duplicate=True),
+    Output("modal-validation",    "is_open", allow_duplicate=True),
+    Input("btn-valider",          "n_clicks"),
+    Input("btn-rejeter",          "n_clicks"),
+    Input("btn-modifier",         "n_clicks"),
+    State("planning-detail-id",   "data"),
+    State("validation-commentaire", "value"),
     prevent_initial_call=True
 )
-def valider_planning(v, r, m, commentaire, planning_id, session):
+def valider_rejeter_planning(v, r, m, planning_id, commentaire):
     if ctx.triggered_id not in ("btn-valider", "btn-rejeter", "btn-modifier"):
-        return "", None, False
-    if not planning_id:
-        return "Aucun planning selectionne.", None, True
+        return "", None, True
 
     action_map = {
         "btn-valider" : StatutPlanningEnum.valide,
@@ -844,7 +1045,7 @@ def valider_planning(v, r, m, commentaire, planning_id, session):
         if not planning:
             return "Planning introuvable.", None, True
 
-        planning.statut     = nouveau_statut
+        planning.statut      = nouveau_statut
         planning.commentaire = commentaire or ""
         planning.updated_at  = datetime.now()
         db.commit()
@@ -854,18 +1055,29 @@ def valider_planning(v, r, m, commentaire, planning_id, session):
             from utils.mailer import (
                 email_planning_valide, email_planning_rejete, email_planning_modifie
             )
-            email_rc, nom_rc = get_resp_classe_email(planning_id)
-            classes = [pc.classe.nom for pc in planning.planning_classes if pc.classe]
+            destinataires = get_resp_classe_emails(planning_id)
+            classes  = [pc.classe.nom for pc in planning.planning_classes if pc.classe]
             classe_n = classes[0] if classes else "-"
             semaine  = planning.semaine.strftime("%d/%m/%Y") if planning.semaine else "-"
 
-            if email_rc:
+            # Construire la liste des séances AVANT db.close()
+            seances_list = _get_seances_list(planning)
+
+            for email_rc, nom_rc in destinataires:
                 if ctx.triggered_id == "btn-valider":
-                    email_planning_valide(email_rc, nom_rc, classe_n, semaine)
+                    email_planning_valide(
+                        email_rc, nom_rc, classe_n, semaine,
+                        seances=seances_list
+                    )
                 elif ctx.triggered_id == "btn-rejeter":
                     email_planning_rejete(email_rc, nom_rc, classe_n, semaine, commentaire)
                 elif ctx.triggered_id == "btn-modifier":
                     email_planning_modifie(email_rc, nom_rc, classe_n, semaine, commentaire)
+
+            # Notifier les professeurs uniquement à la validation
+            if ctx.triggered_id == "btn-valider":
+                _notifier_professeurs(seances_list, classe_n, semaine)
+
         except Exception:
             pass
 
@@ -897,10 +1109,49 @@ def soumettre_planning(n, planning_id, session):
         planning.statut     = StatutPlanningEnum.soumis
         planning.updated_at = datetime.now()
         db.commit()
-        return dbc.Alert("Planning soumis avec succes.", color="success",
-                         dismissable=True,
-                         style={"fontFamily": "'Inter', sans-serif",
-                                "fontSize": "0.875rem"}), True
+
+        # Emails : resp. filière + confirmation au resp. de classe
+        try:
+            from utils.mailer import email_planning_soumis, email_planning_confirmation_rc
+            db.refresh(planning)
+            seances_list = _get_seances_list(planning)
+
+            classes_ids = [pc.classe_id for pc in planning.planning_classes]
+            if classes_ids:
+                classe_n = db.query(Classe).filter(Classe.id == classes_ids[0]).first()
+                nom_classe  = classe_n.nom if classe_n else "-"
+                semaine_str = planning.semaine.strftime("%d/%m/%Y") if planning.semaine else "-"
+                user        = db.query(User).filter(User.id == session.get("user_id")).first()
+                nom_rc      = f"{user.prenom} {user.nom}" if user else "Responsable"
+
+                # Email au resp. filière
+                email_resp, nom_resp = get_resp_filiere_email(classes_ids[0])
+                if email_resp:
+                    email_planning_soumis(
+                        to               = email_resp,
+                        nom_resp_filiere = nom_resp,
+                        nom_resp_classe  = nom_rc,
+                        classe           = nom_classe,
+                        semaine          = semaine_str,
+                        seances          = seances_list,
+                        planning_id      = planning.id,
+                    )
+
+                # Confirmation au resp. de classe (créateur ou délégué)
+                destinataires = get_resp_classe_emails(planning.id)
+                for email_rc, nom_dest in destinataires:
+                    email_planning_confirmation_rc(
+                        to      = email_rc,
+                        nom_rc  = nom_dest,
+                        classe  = nom_classe,
+                        semaine = semaine_str,
+                        seances = seances_list,
+                    )
+        except Exception:
+            pass
+
+        return dbc.Alert("Planning soumis avec succès.", color="success",
+                         dismissable=True, duration=4000), True
     except Exception as e:
         db.rollback()
         return dbc.Alert(f"Erreur : {str(e)}", color="danger"), None

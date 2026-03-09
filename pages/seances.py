@@ -10,6 +10,7 @@ import dash_bootstrap_components as dbc
 from auth import require_auth
 from database import SessionLocal
 from models import Seance, Presence, Module, Classe, Etudiant, User
+from utils.access_helpers import get_classes_for_user, get_default_classe_id
 from datetime import date
 
 dash.register_page(__name__, path="/seances", title="SGA ENSAE — Seances et Presences")
@@ -313,12 +314,19 @@ layout = html.Div([
 
 @callback(
     Output("seances-filtre-classe", "options"),
+    Output("seances-filtre-classe", "value"),
     Output("seance-classe",         "options"),
+    Output("seance-classe",         "value"),
     Input("session-store", "data")
 )
-def load_classes(_):
-    opts = get_classes()
-    return opts, opts
+def load_classes(session):
+    if not session:
+        return [], None, [], None
+    role    = session.get("role", "")
+    user_id = session.get("user_id")
+    opts    = get_classes_for_user(role, user_id)
+    default = get_default_classe_id(role, user_id)
+    return opts, default, opts, default
 
 
 @callback(

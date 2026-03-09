@@ -9,7 +9,9 @@ from dash import html, dcc, callback, Input, Output, State, ctx
 import dash_bootstrap_components as dbc
 from auth import require_auth
 from database import SessionLocal
+from utils.scoped_db import resolve_scope
 from models import Etudiant, User, Classe, Note, Presence, Module
+from utils.access_helpers import get_classes_for_user, get_default_classe_id
 
 dash.register_page(__name__, path="/bulletins", title="SGA ENSAE — Bulletins")
 
@@ -29,12 +31,18 @@ def get_classes():
     finally:
         db.close()
 
-def get_etudiants_avec_stats(classe_id=None):
+def get_etudiants_avec_stats(classe_id=None, classe_ids_scope=None):
     db = SessionLocal()
     try:
         q = db.query(Etudiant).join(User)
         if classe_id:
+            if classe_ids_scope is not None and classe_id not in classe_ids_scope:
+                return []
             q = q.filter(Etudiant.classe_id == classe_id)
+        elif classe_ids_scope is not None:
+            if not classe_ids_scope:
+                return []
+            q = q.filter(Etudiant.classe_id.in_(classe_ids_scope))
         etudiants = q.order_by(User.nom, User.prenom).all()
         result = []
         for e in etudiants:
@@ -291,10 +299,17 @@ layout = html.Div([
 
 @callback(
     Output("bulletins-filtre-classe", "options"),
+    Output("bulletins-filtre-classe", "value"),
     Input("session-store", "data")
 )
-def load_classes(_):
-    return get_classes()
+def load_classes(session):
+    if not session:
+        return [], None
+    role    = session.get("role", "")
+    user_id = session.get("user_id")
+    opts    = get_classes_for_user(role, user_id)
+    default = get_default_classe_id(role, user_id)
+    return opts, default
 
 
 @callback(
@@ -302,9 +317,13 @@ def load_classes(_):
     Output("bulletins-nb",    "children"),
     Input("bulletins-filtre-classe",  "value"),
     Input("bulletins-filtre-periode", "value"),
+    State("session-store",            "data")
 )
-def afficher_liste(classe_id, periode):
-    etudiants = get_etudiants_avec_stats(classe_id)
+def afficher_liste(classe_id, periode, session):
+    role    = (session or {}).get("role", "")
+    user_id = (session or {}).get("user_id")
+    scope   = resolve_scope(role, user_id, None)
+    etudiants = get_etudiants_avec_stats(classe_id, classe_ids_scope=scope)
     if not etudiants:
         return html.P("Aucun etudiant trouve.", style={
             "color": "#9ca3af", "fontFamily": "'Inter', sans-serif",

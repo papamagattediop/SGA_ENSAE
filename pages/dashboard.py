@@ -14,6 +14,7 @@ from models import (
     Presence, Note, Planning, StatutPlanningEnum
 )
 from sqlalchemy import func
+from utils.scoped_db import get_kpis_for_user
 
 dash.register_page(__name__, path="/dashboard", title="SGA ENSAE — Tableau de bord")
 
@@ -154,17 +155,12 @@ def planning_badge(statut: str) -> html.Span:
 
 def vue_admin(session: dict) -> html.Div:
     """Dashboard administrateur."""
-    db = SessionLocal()
-    try:
-        nb_etudiants  = db.query(func.count(Etudiant.id)).scalar()
-        nb_classes    = db.query(func.count(Classe.id)).scalar()
-        nb_filieres   = db.query(func.count(Filiere.id)).scalar()
-        nb_modules    = db.query(func.count(Module.id)).scalar()
-        nb_plannings  = db.query(func.count(Planning.id)).filter(
-            Planning.statut == StatutPlanningEnum.soumis
-        ).scalar()
-    finally:
-        db.close()
+    kpis = get_kpis_for_user("admin", session.get("user_id"))
+    nb_etudiants = kpis["nb_etudiants"]
+    nb_classes   = kpis["nb_classes"]
+    nb_filieres  = kpis["nb_filieres"]
+    nb_modules   = kpis["nb_modules"]
+    nb_plannings = kpis["nb_plannings"]
 
     return html.Div([
         # -- Titre --
@@ -237,15 +233,10 @@ def vue_admin(session: dict) -> html.Div:
 
 def vue_resp_filiere(session: dict) -> html.Div:
     """Dashboard responsable de filiere."""
-    db = SessionLocal()
-    try:
-        nb_etudiants = db.query(func.count(Etudiant.id)).scalar()
-        nb_modules   = db.query(func.count(Module.id)).scalar()
-        nb_plannings = db.query(func.count(Planning.id)).filter(
-            Planning.statut == StatutPlanningEnum.soumis
-        ).scalar()
-    finally:
-        db.close()
+    kpis = get_kpis_for_user("resp_filiere", session.get("user_id"))
+    nb_etudiants = kpis["nb_etudiants"]
+    nb_modules   = kpis["nb_modules"]
+    nb_plannings = kpis["nb_plannings"]
 
     return html.Div([
         html.Div(
@@ -285,13 +276,10 @@ def vue_resp_filiere(session: dict) -> html.Div:
 
 def vue_resp_classe(session: dict) -> html.Div:
     """Dashboard responsable de classe."""
-    db = SessionLocal()
-    try:
-        nb_etudiants = db.query(func.count(Etudiant.id)).scalar()
-        nb_seances   = db.query(func.count(Seance.id)).scalar()
-        nb_modules   = db.query(func.count(Module.id)).scalar()
-    finally:
-        db.close()
+    kpis = get_kpis_for_user("resp_classe", session.get("user_id"))
+    nb_etudiants = kpis["nb_etudiants"]
+    nb_seances   = kpis["nb_seances"]
+    nb_modules   = kpis["nb_modules"]
 
     return html.Div([
         html.Div(

@@ -11,7 +11,18 @@ import plotly.graph_objects as go
 import plotly.express as px
 from database import SessionLocal
 from models import Etudiant, Note, Presence, Module, Classe, Seance, UE
+from utils.access_helpers import get_classes_for_user, get_default_classe_id
 from sqlalchemy import func
+from utils.scoped_db import (
+    resolve_scope,
+    get_notes_data_scoped,
+    get_moyennes_etudiants_scoped,
+    get_assiduite_data_scoped,
+    get_progression_modules_scoped,
+    get_notes_par_module_scoped,
+    get_seances_par_semaine_scoped,
+)
+from utils.access_helpers import get_classes_for_user, get_default_classe_id
 
 dash.register_page(__name__, path="/statistiques", title="SGA ENSAE — Statistiques")
 
@@ -498,10 +509,17 @@ layout = html.Div([
 
 @callback(
     Output("stats-filtre-classe", "options"),
+    Output("stats-filtre-classe", "value"),
     Input("session-store", "data")
 )
-def load_classes(_):
-    return get_classes()
+def load_classes(session):
+    if not session:
+        return [], None
+    role    = session.get("role", "")
+    user_id = session.get("user_id")
+    opts    = get_classes_for_user(role, user_id)
+    default = get_default_classe_id(role, user_id)
+    return opts, default
 
 
 @callback(
@@ -517,13 +535,20 @@ def load_classes(_):
     Input("session-store",          "data"),
 )
 def update_all(classe_id, session):
-    # classe_id = None => stats globales de toute l'ecole
-    notes      = get_notes_data(classe_id)
-    moyennes   = get_moyennes_etudiants(classe_id)
-    assiduite  = get_assiduite_data(classe_id)
-    progression= get_progression_modules(classe_id)
-    notes_mod  = get_notes_par_module(classe_id)
-    seances_sem= get_seances_par_semaine()
+    if not session:
+        empty = empty_fig()
+        return html.Div(), empty, empty, empty, empty, empty, empty, empty
+    role    = session.get("role", "")
+    user_id = session.get("user_id")
+    # Résoudre le périmètre : rôle + filtre dropdown
+    ids = resolve_scope(role, user_id, classe_id)
+
+    notes       = get_notes_data_scoped(ids)
+    moyennes    = get_moyennes_etudiants_scoped(ids)
+    assiduite   = get_assiduite_data_scoped(ids)
+    progression = get_progression_modules_scoped(ids)
+    notes_mod   = get_notes_par_module_scoped(ids)
+    seances_sem = get_seances_par_semaine_scoped(ids)
 
     # classe_id None = toutes classes (stats globales)
     # KPIs

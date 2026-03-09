@@ -10,7 +10,9 @@ import dash_bootstrap_components as dbc
 from auth import require_auth
 from database import SessionLocal
 from models import Etudiant, User, Classe, Note, Presence, Seance, Module, UE, RoleEnum
+from utils.access_helpers import get_classes_for_user, get_default_classe_id
 from sqlalchemy import func
+from utils.scoped_db import resolve_scope
 import pandas as pd
 import io
 import base64
@@ -33,12 +35,27 @@ def get_classes():
     finally:
         db.close()
 
-def get_etudiants(classe_id=None, search=None):
+def get_etudiants(classe_id=None, search=None, classe_ids_scope=None):
+    """
+    classe_id         : filtre dropdown sélectionné par l'utilisateur
+    classe_ids_scope  : périmètre du rôle (None = admin, [...] = restreint)
+    Si classe_id est fourni, il prime sur le scope (mais doit être dans le scope).
+    Si classe_id est None et scope est une liste, on filtre sur le scope entier.
+    """
     db = SessionLocal()
     try:
         q = db.query(Etudiant).join(User)
         if classe_id:
+            # Classe sélectionnée explicitement — vérifier qu'elle est dans le scope
+            if classe_ids_scope is not None and classe_id not in classe_ids_scope:
+                return []   # tentative d'accès hors périmètre
             q = q.filter(Etudiant.classe_id == classe_id)
+        elif classe_ids_scope is not None:
+            # Pas de filtre explicite → restreindre au périmètre du rôle
+            if not classe_ids_scope:
+                return []
+            q = q.filter(Etudiant.classe_id.in_(classe_ids_scope))
+        # else: admin sans filtre → tout voir
         if search:
             q = q.filter(
                 (User.nom.ilike(f"%{search}%")) |
@@ -477,13 +494,19 @@ layout = html.Div([
 
 @callback(
     Output("etudiants-filtre-classe", "options"),
+    Output("etudiants-filtre-classe", "value"),
     Output("notes-classe-select",     "options"),
     Output("etud-classe",             "options"),
     Input("session-store", "data")
 )
-def load_classes(_):
-    opts = get_classes()
-    return opts, opts, opts
+def load_classes(session):
+    if not session:
+        return [], None, [], []
+    role    = session.get("role", "")
+    user_id = session.get("user_id")
+    opts    = get_classes_for_user(role, user_id)
+    default = get_default_classe_id(role, user_id)
+    return opts, default, opts, opts
 
 
 @callback(
@@ -491,10 +514,14 @@ def load_classes(_):
     Output("etudiants-nb",    "children"),
     Input("etudiants-filtre-classe", "value"),
     Input("etudiants-search",        "value"),
-    Input("etudiants-refresh",       "data")
+    Input("etudiants-refresh",       "data"),
+    State("session-store",           "data")
 )
-def afficher_etudiants(classe_id, search, _):
-    etudiants = get_etudiants(classe_id, search)
+def afficher_etudiants(classe_id, search, _, session):
+    role    = (session or {}).get("role", "")
+    user_id = (session or {}).get("user_id")
+    scope   = resolve_scope(role, user_id, None)   # périmètre complet du rôle
+    etudiants = get_etudiants(classe_id, search, classe_ids_scope=scope)
     if not etudiants:
         return html.P("Aucun etudiant trouve.", style={
             "color": "#9ca3af", "fontFamily": "'Inter', sans-serif",

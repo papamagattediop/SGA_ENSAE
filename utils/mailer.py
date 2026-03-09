@@ -151,6 +151,78 @@ def base_template(titre: str, contenu: str, couleur_header: str = BLEU) -> str:
 #  EMAILS PLANNING
 # ============================================================
 
+def _tableau_seances_html(seances: list, couleur: str, colonnes: list) -> str:
+    """
+    Helper interne : génère le HTML d'un tableau de séances.
+    colonnes : liste de clés parmi ['jour', 'date', 'module', 'enseignant', 'heure_debut', 'heure_fin']
+    Les colonnes 'heure_debut' et 'heure_fin' sont fusionnées en 'Horaire'.
+    """
+    entetes = {
+        "jour"      : "Jour",
+        "date"      : "Date",
+        "module"    : "Module",
+        "enseignant": "Enseignant",
+        "horaire"   : "Horaire",
+    }
+
+    # Construire les en-têtes (remplacer heure_debut+heure_fin par horaire)
+    cols_affichees = []
+    for c in colonnes:
+        if c == "heure_debut":
+            cols_affichees.append("horaire")
+        elif c == "heure_fin":
+            continue
+        else:
+            cols_affichees.append(c)
+
+    ths = "".join([
+        f"""<th style="padding:10px 10px;font-size:0.72rem;color:{couleur};
+                       text-align:left;font-weight:700;text-transform:uppercase;
+                       border-bottom:1px solid #e5e7eb;">
+                {entetes.get(c, c)}
+            </th>"""
+        for c in cols_affichees
+    ])
+
+    if not seances:
+        nb_cols = len(cols_affichees)
+        rows_html = f"""
+        <tr>
+            <td colspan="{nb_cols}" style="padding:16px;text-align:center;
+                                           font-size:0.82rem;color:#9ca3af;font-style:italic;">
+                Aucune séance enregistrée.
+            </td>
+        </tr>"""
+    else:
+        rows_html = ""
+        for s in seances:
+            tds = ""
+            for c in cols_affichees:
+                if c == "horaire":
+                    val = f"{s.get('heure_debut', '-')} – {s.get('heure_fin', '-')}"
+                    style = "color:#6b7280;white-space:nowrap;"
+                elif c in ("jour", "date"):
+                    val   = s.get(c, '-')
+                    style = "color:#6b7280;white-space:nowrap;"
+                elif c == "enseignant":
+                    val   = s.get(c) or "—"
+                    style = "color:#6b7280;"
+                else:
+                    val   = s.get(c, '-')
+                    style = "color:#374151;"
+                tds += f'<td style="padding:8px 10px;font-size:0.80rem;{style}">{val}</td>'
+            rows_html += f'<tr style="border-bottom:1px solid #f3f4f6;">{tds}</tr>'
+
+    return f"""
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border:1px solid #e5e7eb;border-radius:8px;
+                      overflow:hidden;margin-bottom:24px;border-collapse:collapse;">
+            <tr style="background:{couleur}12;">{ths}</tr>
+            {rows_html}
+        </table>
+    """
+
+
 def email_planning_soumis(
     to: str,
     nom_resp_filiere: str,
@@ -161,25 +233,14 @@ def email_planning_soumis(
     planning_id: int
 ) -> tuple[bool, str]:
     """
-    Email envoye au responsable de filiere quand un planning est soumis.
-    seances : liste de dicts {module, date, heure_debut, heure_fin}
+    Email envoyé au responsable de filière quand un planning est soumis.
+    seances : liste de dicts {module, enseignant, date, jour, heure_debut, heure_fin}
     """
-    rows_seances = "".join([
-        f"""
-        <tr style="border-bottom:1px solid #f3f4f6;">
-            <td style="padding:8px 12px;font-size:0.82rem;color:#374151;">
-                {s.get('date', '-')}
-            </td>
-            <td style="padding:8px 12px;font-size:0.82rem;color:#374151;">
-                {s.get('module', '-')}
-            </td>
-            <td style="padding:8px 12px;font-size:0.82rem;color:#6b7280;">
-                {s.get('heure_debut', '-')} - {s.get('heure_fin', '-')}
-            </td>
-        </tr>
-        """
-        for s in seances
-    ])
+    tableau = _tableau_seances_html(
+        seances,
+        couleur=BLEU,
+        colonnes=["jour", "date", "module", "enseignant", "heure_debut", "heure_fin"]
+    )
 
     contenu = f"""
         <p style="color:#374151;font-size:0.9rem;line-height:1.6;margin:0 0 16px;">
@@ -189,33 +250,11 @@ def email_planning_soumis(
             <strong>{nom_resp_classe}</strong> a soumis un planning pour la classe
             <strong>{classe}</strong> — semaine du <strong>{semaine}</strong>.
         </p>
-
-        <!-- Tableau seances -->
-        <table width="100%" cellpadding="0" cellspacing="0"
-               style="border:1px solid #e5e7eb;border-radius:8px;
-                      overflow:hidden;margin-bottom:24px;">
-            <tr style="background:{BLEU}10;">
-                <th style="padding:10px 12px;font-size:0.75rem;color:{BLEU};
-                           text-align:left;font-weight:700;text-transform:uppercase;">
-                    Date
-                </th>
-                <th style="padding:10px 12px;font-size:0.75rem;color:{BLEU};
-                           text-align:left;font-weight:700;text-transform:uppercase;">
-                    Module
-                </th>
-                <th style="padding:10px 12px;font-size:0.75rem;color:{BLEU};
-                           text-align:left;font-weight:700;text-transform:uppercase;">
-                    Horaire
-                </th>
-            </tr>
-            {rows_seances}
-        </table>
-
+        {tableau}
         <p style="color:#374151;font-size:0.875rem;margin:0 0 20px;">
             Connectez-vous sur <strong>{APP_NAME}</strong> pour valider,
             modifier ou rejeter ce planning.
         </p>
-
         <div style="text-align:center;margin-top:24px;">
             <a href="http://127.0.0.1:8050/planning"
                style="background:{BLEU};color:#ffffff;padding:12px 28px;
@@ -225,12 +264,7 @@ def email_planning_soumis(
             </a>
         </div>
     """
-
-    html = base_template(
-        f"Nouveau planning a valider — {classe}",
-        contenu,
-        BLEU
-    )
+    html = base_template(f"Nouveau planning a valider — {classe}", contenu, BLEU)
     return send_email(to, f"Planning semaine {semaine} — {classe} en attente de validation", html)
 
 
@@ -238,9 +272,21 @@ def email_planning_valide(
     to: str,
     nom_resp_classe: str,
     classe: str,
-    semaine: str
+    semaine: str,
+    seances: list = None
 ) -> tuple[bool, str]:
-    """Email envoye au responsable de classe quand son planning est valide."""
+    """
+    Email envoyé au responsable de classe quand son planning est validé.
+    Inclut le tableau récapitulatif des séances confirmées.
+    """
+    seances = seances or []
+
+    tableau = _tableau_seances_html(
+        seances,
+        couleur=VERT,
+        colonnes=["jour", "date", "module", "heure_debut", "heure_fin"]
+    ) if seances else ""
+
     contenu = f"""
         <p style="color:#374151;font-size:0.9rem;line-height:1.6;margin:0 0 16px;">
             Bonjour <strong>{nom_resp_classe}</strong>,
@@ -248,14 +294,17 @@ def email_planning_valide(
         <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;
                     padding:16px;margin-bottom:20px;">
             <p style="color:{VERT};font-weight:700;font-size:0.9rem;margin:0 0 6px;">
-                Planning valide
+                ✅ Planning validé
             </p>
             <p style="color:#374151;font-size:0.875rem;margin:0;">
-                Votre planning de la classe <strong>{classe}</strong>
+                Le planning de la classe <strong>{classe}</strong>
                 pour la semaine du <strong>{semaine}</strong>
-                a ete <strong style="color:{VERT};">valide</strong>.
+                a été <strong style="color:{VERT};">validé</strong>.
+                Les enseignants ont été notifiés automatiquement.
             </p>
         </div>
+        {f'<p style="color:#374151;font-size:0.85rem;font-weight:700;margin:0 0 8px;">Récapitulatif des séances confirmées :</p>' if seances else ""}
+        {tableau}
         <div style="text-align:center;margin-top:24px;">
             <a href="http://127.0.0.1:8050/planning"
                style="background:{VERT};color:#ffffff;padding:12px 28px;
@@ -266,7 +315,7 @@ def email_planning_valide(
         </div>
     """
     html = base_template(f"Planning valide — {classe}", contenu, VERT)
-    return send_email(to, f"Planning semaine {semaine} — {classe} valide", html)
+    return send_email(to, f"Planning semaine {semaine} — {classe} valide ✅", html)
 
 
 def email_planning_rejete(
@@ -276,7 +325,7 @@ def email_planning_rejete(
     semaine: str,
     commentaire: str
 ) -> tuple[bool, str]:
-    """Email envoye au responsable de classe quand son planning est rejete."""
+    """Email envoyé au responsable de classe quand son planning est rejeté."""
     contenu = f"""
         <p style="color:#374151;font-size:0.9rem;line-height:1.6;margin:0 0 16px;">
             Bonjour <strong>{nom_resp_classe}</strong>,
@@ -284,12 +333,12 @@ def email_planning_rejete(
         <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;
                     padding:16px;margin-bottom:20px;">
             <p style="color:#ef4444;font-weight:700;font-size:0.9rem;margin:0 0 6px;">
-                Planning rejete
+                Planning rejeté
             </p>
             <p style="color:#374151;font-size:0.875rem;margin:0 0 10px;">
                 Votre planning de la classe <strong>{classe}</strong>
                 pour la semaine du <strong>{semaine}</strong>
-                a ete <strong style="color:#ef4444;">rejete</strong>.
+                a été <strong style="color:#ef4444;">rejeté</strong>.
             </p>
             <p style="color:#374151;font-size:0.875rem;margin:0;">
                 <strong>Commentaire :</strong> {commentaire or "Aucun commentaire."}
@@ -304,8 +353,8 @@ def email_planning_rejete(
             </a>
         </div>
     """
-    html = base_template(f"Planning rejete — {classe}", contenu, "#ef4444")
-    return send_email(to, f"Planning semaine {semaine} — {classe} rejete", html)
+    html = base_template(f"Planning rejeté — {classe}", contenu, "#ef4444")
+    return send_email(to, f"Planning semaine {semaine} — {classe} rejeté", html)
 
 
 def email_planning_modifie(
@@ -315,7 +364,7 @@ def email_planning_modifie(
     semaine: str,
     commentaire: str
 ) -> tuple[bool, str]:
-    """Email envoye au responsable de classe quand son planning est modifie."""
+    """Email envoyé au responsable de classe quand son planning est modifié."""
     contenu = f"""
         <p style="color:#374151;font-size:0.9rem;line-height:1.6;margin:0 0 16px;">
             Bonjour <strong>{nom_resp_classe}</strong>,
@@ -323,12 +372,12 @@ def email_planning_modifie(
         <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;
                     padding:16px;margin-bottom:20px;">
             <p style="color:#d97706;font-weight:700;font-size:0.9rem;margin:0 0 6px;">
-                Planning modifie
+                Planning à modifier
             </p>
             <p style="color:#374151;font-size:0.875rem;margin:0 0 10px;">
                 Votre planning de la classe <strong>{classe}</strong>
                 pour la semaine du <strong>{semaine}</strong>
-                a ete <strong style="color:#d97706;">modifie</strong>.
+                nécessite des <strong style="color:#d97706;">modifications</strong>.
             </p>
             <p style="color:#374151;font-size:0.875rem;margin:0;">
                 <strong>Commentaire :</strong> {commentaire or "Aucun commentaire."}
@@ -343,9 +392,112 @@ def email_planning_modifie(
             </a>
         </div>
     """
-    html = base_template(f"Planning modifie — {classe}", contenu, "#d97706")
-    return send_email(to, f"Planning semaine {semaine} — {classe} modifie", html)
+    html = base_template(f"Planning modifié — {classe}", contenu, "#d97706")
+    return send_email(to, f"Planning semaine {semaine} — {classe} modifié", html)
 
+
+def email_planning_prof(
+    to: str,
+    nom_prof: str,
+    classe: str,
+    semaine: str,
+    seances_prof: list
+) -> tuple[bool, str]:
+    """
+    Email envoyé à chaque enseignant concerné quand un planning est validé.
+    seances_prof : liste de dicts filtrée sur cet enseignant uniquement.
+    """
+    nb = len(seances_prof)
+
+    tableau = _tableau_seances_html(
+        seances_prof,
+        couleur=VERT,
+        colonnes=["jour", "date", "module", "heure_debut", "heure_fin"]
+    )
+
+    contenu = f"""
+        <p style="color:#374151;font-size:0.9rem;line-height:1.6;margin:0 0 16px;">
+            Bonjour <strong>{nom_prof}</strong>,
+        </p>
+        <p style="color:#374151;font-size:0.9rem;line-height:1.6;margin:0 0 20px;">
+            Le planning de la classe <strong>{classe}</strong> pour la semaine du
+            <strong>{semaine}</strong> vient d'être
+            <strong style="color:{VERT};">validé</strong>.
+            Vous avez <strong>{nb} séance{'s' if nb > 1 else ''}</strong>
+            programmée{'s' if nb > 1 else ''} cette semaine :
+        </p>
+        {tableau}
+        <p style="color:#6b7280;font-size:0.82rem;margin:0 0 20px;">
+            Merci de vous connecter sur <strong>{APP_NAME}</strong> pour consulter
+            le planning complet.
+        </p>
+        <div style="text-align:center;margin-top:20px;">
+            <a href="http://127.0.0.1:8050/planning"
+               style="background:{VERT};color:#ffffff;padding:12px 28px;
+                      border-radius:8px;text-decoration:none;font-weight:700;
+                      font-size:0.875rem;display:inline-block;">
+                Voir le planning
+            </a>
+        </div>
+    """
+    html = base_template(f"Vos cours — semaine du {semaine}", contenu, VERT)
+    return send_email(
+        to,
+        f"Vos cours semaine {semaine} — {classe}",
+        html
+    )
+
+
+
+def email_planning_confirmation_rc(
+    to: str,
+    nom_rc: str,
+    classe: str,
+    semaine: str,
+    seances: list = None
+) -> tuple[bool, str]:
+    """
+    Email de confirmation envoyé au responsable de classe
+    après qu'il a soumis son planning. Lui confirme la bonne
+    réception et lui montre le récapitulatif des séances soumises.
+    """
+    seances = seances or []
+
+    tableau = _tableau_seances_html(
+        seances,
+        couleur=BLEU,
+        colonnes=["jour", "date", "module", "heure_debut", "heure_fin"]
+    ) if seances else ""
+
+    contenu = f"""
+        <p style="color:#374151;font-size:0.9rem;line-height:1.6;margin:0 0 16px;">
+            Bonjour <strong>{nom_rc}</strong>,
+        </p>
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;
+                    padding:16px;margin-bottom:20px;">
+            <p style="color:{BLEU};font-weight:700;font-size:0.9rem;margin:0 0 6px;">
+                📋 Planning soumis avec succès
+            </p>
+            <p style="color:#374151;font-size:0.875rem;margin:0;">
+                Votre planning pour la classe <strong>{classe}</strong>
+                — semaine du <strong>{semaine}</strong> —
+                a bien été soumis au responsable de filière pour validation.
+                Vous recevrez une notification dès qu'il aura été traité.
+            </p>
+        </div>
+        {f'<p style="color:#374151;font-size:0.85rem;font-weight:700;margin:0 0 8px;">Récapitulatif des séances soumises :</p>' if seances else ""}
+        {tableau}
+        <div style="text-align:center;margin-top:24px;">
+            <a href="http://127.0.0.1:8050/planning"
+               style="background:{BLEU};color:#ffffff;padding:12px 28px;
+                      border-radius:8px;text-decoration:none;font-weight:700;
+                      font-size:0.875rem;display:inline-block;">
+                Voir mon planning
+            </a>
+        </div>
+    """
+    html = base_template(f"Planning soumis — {classe}", contenu, BLEU)
+    return send_email(to, f"Planning semaine {semaine} — {classe} soumis ✅", html)
 
 # ============================================================
 #  EMAIL BULLETIN
@@ -361,12 +513,12 @@ def email_bulletin(
     rang: int,
     taux_assiduite: float
 ) -> tuple[bool, str]:
-    """Email envoye a l'etudiant avec ses resultats."""
+    """Email envoyé à l'étudiant avec ses résultats."""
     mention = (
-        "Tres Bien" if moyenne >= 16 else
-        "Bien"      if moyenne >= 14 else
+        "Tres Bien"  if moyenne >= 16 else
+        "Bien"       if moyenne >= 14 else
         "Assez Bien" if moyenne >= 12 else
-        "Passable"  if moyenne >= 10 else
+        "Passable"   if moyenne >= 10 else
         "Insuffisant"
     )
     couleur_moy = VERT if moyenne >= 10 else "#ef4444"
@@ -376,7 +528,7 @@ def email_bulletin(
             Bonjour <strong>{prenom_etudiant} {nom_etudiant}</strong>,
         </p>
         <p style="color:#374151;font-size:0.9rem;margin:0 0 20px;">
-            Vos resultats pour la periode <strong>{periode}</strong>
+            Vos résultats pour la période <strong>{periode}</strong>
             sont disponibles.
         </p>
 
@@ -397,7 +549,7 @@ def email_bulletin(
                 <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;">
                     <span style="color:#9ca3af;font-size:0.72rem;
                                  text-transform:uppercase;font-weight:600;">
-                        Moyenne generale
+                        Moyenne générale
                     </span><br>
                     <span style="color:{couleur_moy};font-weight:800;font-size:1.2rem;">
                         {moyenne}/20
@@ -415,7 +567,7 @@ def email_bulletin(
                 <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;">
                     <span style="color:#9ca3af;font-size:0.72rem;
                                  text-transform:uppercase;font-weight:600;">
-                        Assiduite
+                        Assiduité
                     </span><br>
                     <span style="color:{VERT if taux_assiduite >= 80 else '#ef4444'};
                                  font-weight:700;font-size:0.9rem;">
@@ -443,10 +595,10 @@ def email_bulletin(
             </a>
         </div>
     """
-    html = base_template(f"Vos resultats — {periode}", contenu, BLEU)
+    html = base_template(f"Vos résultats — {periode}", contenu, BLEU)
     return send_email(
         to,
-        f"Resultats {periode} — {classe}",
+        f"Résultats {periode} — {classe}",
         html
     )
 

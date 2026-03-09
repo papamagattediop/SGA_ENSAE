@@ -10,6 +10,7 @@ import dash_bootstrap_components as dbc
 from auth import require_auth
 from database import SessionLocal
 from models import UE, Module, Classe, Periode, Seance, UEClasse
+from utils.access_helpers import get_classes_for_user, get_default_classe_id
 import pandas as pd
 import io
 import base64
@@ -95,26 +96,61 @@ def get_modules(ue_id=None):
 
 def generate_template_excel() -> bytes:
     """
-    Genere un template Excel avec deux feuilles :
-    - Feuille 1 : UE  (Code_UE, Libelle_UE, Coefficient_UE, Code_Periode, Classe_ID)
+    Génère un template Excel avec trois feuilles :
+    - Feuille 1 : UE      (Code_UE, Libelle_UE, Coefficient_UE, Code_Periode, Classe_ID)
     - Feuille 2 : Modules (Code_Module, Libelle_Module, Code_UE_Parent,
                            Enseignant, Coefficient_Module, Volume_Horaire_h, Classe_ID)
+    - Feuille 3 : Référence_Classes  ← NOUVEAU
+                  (Classe_ID, Nom_Classe, Code_Filiere, Niveau, Annee_Scolaire)
 
-    IMPORTANT : Code_Periode doit correspondre au libelle exact d'une periode
-    existante en base (ex: "Semestre 1"), ET Classe_ID doit correspondre
-    a l'ID de la classe associee a cette periode.
+    IMPORTANT :
+      • Classe_ID doit correspondre à l'ID affiché dans la feuille "Référence_Classes".
+      • Code_Periode doit correspondre au libellé exact d'une période existante en base
+        (ex: "Semestre 1") pour la classe choisie.
     """
-    # Recuperer les periodes et classes disponibles pour informer l'utilisateur
+    import io
+    import pandas as pd
+    from openpyxl.styles import PatternFill, Font, Alignment
+    from openpyxl.worksheet.datavalidation import DataValidation
+    from openpyxl.utils import get_column_letter
+
+    from database import SessionLocal
+    from models import Periode, Classe, Filiere
+
     db = SessionLocal()
     try:
         periodes = db.query(Periode).all()
-        classes  = db.query(Classe).all()
-        # Exemple : prendre la premiere classe disponible
-        exemple_classe_id  = classes[0].id  if classes  else 1
+        classes  = (
+            db.query(Classe)
+              .join(Filiere, Classe.filiere_id == Filiere.id)
+              .order_by(Filiere.code, Classe.niveau, Classe.nom)
+              .all()
+        )
+
+        # Valeurs d'exemple : première classe dispo
+        exemple_classe_id   = classes[0].id      if classes  else 1
         exemple_periode_lib = periodes[0].libelle if periodes else "Semestre 1"
+
+        # ── Référence classes ──────────────────────────────────
+        ref_data = []
+        for c in classes:
+            ref_data.append({
+                "Classe_ID"      : c.id,
+                "Nom_Classe"     : c.nom,
+                "Code_Filiere"   : c.filiere.code  if c.filiere else "",
+                "Filiere_Libelle": c.filiere.libelle if c.filiere else "",
+                "Niveau"         : c.niveau,
+                "Annee_Scolaire" : c.annee_scolaire,
+            })
+        df_ref = pd.DataFrame(ref_data) if ref_data else pd.DataFrame(columns=[
+            "Classe_ID", "Nom_Classe", "Code_Filiere",
+            "Filiere_Libelle", "Niveau", "Annee_Scolaire"
+        ])
+
     finally:
         db.close()
 
+    # ── DataFrames UE et Modules ───────────────────────────────
     df_ue = pd.DataFrame(columns=[
         "Code_UE", "Libelle_UE", "Coefficient_UE", "Code_Periode", "Classe_ID"
     ])
@@ -129,29 +165,137 @@ def generate_template_excel() -> bytes:
     df_mod.loc[1] = ["MOD-STAT2", "Probabilites",              "UE-STAT", "Dr. Ndiaye",  2, 25, exemple_classe_id]
     df_mod.loc[2] = ["MOD-ECO1",  "Microeconomie",             "UE-ECO",  "Dr. Ba",      3, 40, exemple_classe_id]
 
+    # ── Écriture Excel ─────────────────────────────────────────
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df_ue.to_excel(writer,  sheet_name="UE",      index=False)
-        df_mod.to_excel(writer, sheet_name="Modules", index=False)
+        df_ue.to_excel(writer,  sheet_name="UE",                 index=False)
+        df_mod.to_excel(writer, sheet_name="Modules",            index=False)
+        df_ref.to_excel(writer, sheet_name="Référence_Classes",  index=False)
 
-        # Style en-tetes
         wb = writer.book
         from openpyxl.styles import PatternFill, Font, Alignment
-        header_fill_ue  = PatternFill("solid", fgColor="003580")
-        header_fill_mod = PatternFill("solid", fgColor="006B3F")
-        font_header     = Font(color="FFFFFF", bold=True)
 
-        for sheet_name, fill in [("UE", header_fill_ue), ("Modules", header_fill_mod)]:
-            ws = writer.sheets[sheet_name]
-            for cell in ws[1]:
-                cell.fill      = fill
-                cell.font      = font_header
-                cell.alignment = Alignment(horizontal="center")
-            for col in ws.columns:
-                ws.column_dimensions[col[0].column_letter].width = 22
+        # ── Couleurs en-têtes ──────────────────────────────────
+        FILL_UE  = PatternFill("solid", fgColor="003580")   # bleu ENSAE
+        FILL_MOD = PatternFill("solid", fgColor="006B3F")   # vert ENSAE
+        FILL_REF = PatternFill("solid", fgColor="4B0082")   # violet (lecture seule)
+        FILL_CID = PatternFill("solid", fgColor="FFF3CD")   # jaune pâle — colonne Classe_ID
+        FONT_W   = Font(color="FFFFFF", bold=True, name="Calibri")
+        FONT_B   = Font(color="111827", bold=True, name="Calibri")
+        ALIGN_C  = Alignment(horizontal="center")
+
+        # ── Style feuille UE ───────────────────────────────────
+        ws_ue = writer.sheets["UE"]
+        for cell in ws_ue[1]:
+            cell.fill      = FILL_UE
+            cell.font      = FONT_W
+            cell.alignment = ALIGN_C
+        for col in ws_ue.columns:
+            ws_ue.column_dimensions[col[0].column_letter].width = 26
+
+        # Mettre en évidence la colonne Classe_ID (col 5 = E)
+        _highlight_classe_id_col(ws_ue, col_letter="E", fill=FILL_CID)
+
+        # Note d'aide dans la cellule E1
+        ws_ue["E1"].comment = _make_comment(
+            "⚠ Classe_ID requis\nConsultez la feuille 'Référence_Classes' "
+            "pour obtenir l'ID de votre classe."
+        )
+
+        # Validation données : liste des IDs de classes (feuille Référence_Classes)
+        if len(df_ref) > 0:
+            nb_classes = len(df_ref)
+            dv_ue = DataValidation(
+                type="list",
+                formula1=f"'Référence_Classes'!$A$2:$A${nb_classes + 1}",
+                allow_blank=False,
+                showErrorMessage=True,
+                errorTitle="Classe_ID invalide",
+                error="Choisissez un ID dans la feuille 'Référence_Classes'."
+            )
+            ws_ue.add_data_validation(dv_ue)
+            dv_ue.add(f"E2:E1000")
+
+        # ── Style feuille Modules ──────────────────────────────
+        ws_mod = writer.sheets["Modules"]
+        for cell in ws_mod[1]:
+            cell.fill      = FILL_MOD
+            cell.font      = FONT_W
+            cell.alignment = ALIGN_C
+        for col in ws_mod.columns:
+            ws_mod.column_dimensions[col[0].column_letter].width = 26
+
+        # Colonne Classe_ID = col 7 (G)
+        _highlight_classe_id_col(ws_mod, col_letter="G", fill=FILL_CID)
+        ws_mod["G1"].comment = _make_comment(
+            "⚠ Classe_ID requis\nConsultez la feuille 'Référence_Classes' "
+            "pour obtenir l'ID de votre classe."
+        )
+        if len(df_ref) > 0:
+            dv_mod = DataValidation(
+                type="list",
+                formula1=f"'Référence_Classes'!$A$2:$A${nb_classes + 1}",
+                allow_blank=False,
+                showErrorMessage=True,
+                errorTitle="Classe_ID invalide",
+                error="Choisissez un ID dans la feuille 'Référence_Classes'."
+            )
+            ws_mod.add_data_validation(dv_mod)
+            dv_mod.add("G2:G1000")
+
+        # ── Style feuille Référence_Classes ───────────────────
+        ws_ref = writer.sheets["Référence_Classes"]
+        for cell in ws_ref[1]:
+            cell.fill      = FILL_REF
+            cell.font      = FONT_W
+            cell.alignment = ALIGN_C
+
+        # Colonne Classe_ID en gras + fond bleu clair
+        FILL_ID_REF = PatternFill("solid", fgColor="DBEAFE")
+        for row in ws_ref.iter_rows(min_row=2, min_col=1, max_col=1):
+            for cell in row:
+                cell.fill = FILL_ID_REF
+                cell.font = Font(bold=True, name="Calibri", color="003580")
+                cell.alignment = ALIGN_C
+
+        col_widths = [12, 22, 16, 38, 10, 14]
+        for i, w in enumerate(col_widths, start=1):
+            ws_ref.column_dimensions[get_column_letter(i)].width = w
+
+        # Figer la première ligne + protéger la feuille en lecture
+        ws_ref.freeze_panes = "A2"
+
+        # Bandeau d'avertissement ligne 1 — pas de protection car openpyxl
+        # ne supporte pas sheet.protection facilement sans mot de passe
+        # On ajoute juste une note explicative dans A1
+        ws_ref["A1"].comment = _make_comment(
+            "⚠ NE PAS MODIFIER cette feuille.\n"
+            "Elle est générée automatiquement depuis la base de données.\n"
+            "Utilisez les IDs de la colonne 'Classe_ID' dans les feuilles UE et Modules."
+        )
 
     buffer.seek(0)
     return buffer.read()
+
+# ── Helpers ───────────────────────────────────────────────────
+
+def _highlight_classe_id_col(ws, col_letter: str, fill):
+    """Colore le fond de toutes les cellules de la colonne (hors en-tête)."""
+    from openpyxl.styles import Font
+    for row in ws.iter_rows(min_row=2, min_col=ord(col_letter) - 64,
+                             max_col=ord(col_letter) - 64, max_row=100):
+        for cell in row:
+            cell.fill = fill
+
+
+def _make_comment(text: str):
+    """Crée un commentaire openpyxl."""
+    from openpyxl.comments import Comment
+    c = Comment(text, "SGA ENSAE")
+    c.width  = 260
+    c.height = 80
+    return c
+
 
 
 # ============================================================
@@ -542,13 +686,19 @@ layout = html.Div([
 
 @callback(
     Output("cours-filtre-classe", "options"),
+    Output("cours-filtre-classe", "value"),
     Output("module-classe",        "options"),
     Output("ue-classes",           "options"),
     Input("session-store", "data")
 )
-def load_classes(_):
-    opts = get_classes()
-    return opts, opts, opts
+def load_classes(session):
+    if not session:
+        return [], None, [], []
+    role    = session.get("role", "")
+    user_id = session.get("user_id")
+    opts    = get_classes_for_user(role, user_id)
+    default = get_default_classe_id(role, user_id)
+    return opts, default, opts, opts
 
 
 @callback(
