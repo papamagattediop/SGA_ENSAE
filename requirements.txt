@@ -2,6 +2,9 @@
 #  SGA ENSAE — requirements.txt
 # ============================================================
 
+# Serveur WSGI (requis pour Render/production)
+gunicorn==21.2.0
+
 # Framework web
 dash==2.17.0
 dash-bootstrap-components==1.6.0
