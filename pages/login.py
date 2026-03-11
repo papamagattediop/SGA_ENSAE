@@ -125,7 +125,7 @@ layout = html.Div(
                                     "width": "7px", "height": "7px",
                                     "borderRadius": "50%", "background": OR,
                                 }),
-                                html.Span("ENSAE Dakar · Depuis 1961", style={
+                                html.Span("ENSAE Pierre Ndiaye De DAKAR", style={
                                     "fontSize"     : "0.75rem",
                                     "fontWeight"   : "600",
                                     "letterSpacing": "0.04em",
