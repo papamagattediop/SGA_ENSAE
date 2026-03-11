@@ -106,6 +106,7 @@ class User(Base):
     prenom        = Column(String(50), nullable=False)
     email         = Column(String(100), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
+    password_hash_eleve = Column(String(255), nullable=True)
     role          = Column(SAEnum(RoleEnum), nullable=False)
     is_active     = Column(Boolean, default=True)
 

@@ -57,6 +57,12 @@ def get_classes_for_user(role: str, user_id: int) -> list[dict]:
                 .order_by(Classe.nom)
                 .all()
             )
+        elif role == "eleve":
+            etudiant = db.query(Etudiant).filter(Etudiant.user_id == user_id).first()
+            if etudiant:
+                classes = db.query(Classe).filter(Classe.id == etudiant.classe_id).all()
+            else:
+                classes = []
 
         else:
             classes = []
@@ -74,7 +80,13 @@ def get_default_classe_id(role: str, user_id: int) -> int | None:
     """
     if role != "resp_classe":
         return None
+    
+    elif role == "eleve":
+        etudiant = db.query(Etudiant).filter(Etudiant.user_id == user_id).first()
+        return etudiant.classe_id if etudiant else None
+    
     db = SessionLocal()
+    
     try:
         rc = (
             db.query(ResponsableClasse)

@@ -98,6 +98,10 @@ def create_navbar(session: dict) -> html.Div:
             ],
             accent=VERT
         ))
+    if role == "eleve":
+        nav_items.append(sga_link("Mon planning", "/planning", "event_note"))
+        nav_items.append(sga_link("Mes notes",    "/etudiants", "school"))
+        nav_items.append(sga_link("Mon bulletin", "/bulletins", "description"))
 
     # ── Analyses ─────────────────────────────────────────────
     if role in ("admin", "resp_filiere"):

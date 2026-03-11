@@ -6,7 +6,7 @@
 
 import hashlib
 from database import SessionLocal
-from models import User, RoleEnum, Filiere, Classe
+from models import User, RoleEnum, Filiere, Classe, Etudiant
 from models import ResponsableFiliere, ResponsableClasse
 
 
@@ -19,7 +19,7 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 def verify_password(password: str, hashed: str) -> bool:
-    """Vérifie un mot de passe contre son hash."""
+    """Vérifie un mot de passe contre son hash SHA-256 stocké."""
     return hash_password(password) == hashed
 
 
@@ -29,18 +29,37 @@ def verify_password(password: str, hashed: str) -> bool:
 
 def login(email: str, password: str):
     """
-    Retourne l'utilisateur si credentials valides et compte actif.
-    Retourne None sinon.
+    Retourne la session utilisateur si credentials valides et compte actif.
+
+    Gestion du double accès délégué / étudiant :
+    ─────────────────────────────────────────────
+    Un délégué (resp_classe) peut aussi être un étudiant inscrit.
+    Son compte a le rôle resp_classe, mais il conserve un enregistrement
+    dans la table Etudiant avec son matricule.
+
+    Deux cas de connexion pour un délégué :
+      1. Mot de passe délégué → session avec rôle "resp_classe"
+      2. Matricule étudiant   → session avec rôle "eleve"
+
+    Attention : verify_password(p, h) calcule hash(p) == h
+    Donc pour tester le matricule : verify_password(password, hash_password(matricule))
+    est équivalent à hash(password) == hash(matricule), ce qui est correct.
     """
     if not email or not password:
         return None
+
     db = SessionLocal()
     try:
         user = db.query(User).filter(
-            User.email == email,
+            User.email    == email,
             User.is_active == True
         ).first()
-        if user and verify_password(password, user.password_hash):
+
+        if not user:
+            return None
+
+        # ── Cas 1 : mot de passe principal → rôle réel ──
+        if verify_password(password, user.password_hash):
             return {
                 "user_id"  : user.id,
                 "nom"      : user.nom,
@@ -49,7 +68,29 @@ def login(email: str, password: str):
                 "role"     : user.role.value,
                 "is_active": user.is_active
             }
+
+        # ── Cas 2 : délégué qui entre son matricule étudiant ──
+        # Applicable uniquement si rôle == resp_classe ET Etudiant existe
+        if user.role.value == "resp_classe":
+            etudiant = db.query(Etudiant).filter(
+                Etudiant.user_id == user.id
+            ).first()
+
+            if etudiant:
+                # Le mot de passe étudiant par défaut est le matricule en clair.
+                # On compare hash(password_saisi) avec hash(matricule)
+                if verify_password(password, hash_password(etudiant.matricule)):
+                    return {
+                        "user_id"  : user.id,
+                        "nom"      : user.nom,
+                        "prenom"   : user.prenom,
+                        "email"    : user.email,
+                        "role"     : "eleve",
+                        "is_active": user.is_active
+                    }
+
         return None
+
     finally:
         db.close()
 
@@ -100,9 +141,7 @@ def is_authenticated(session: dict) -> bool:
 def can_manage_classe(session: dict, classe_id: int) -> bool:
     """
     Vérifie si l'utilisateur peut gérer une classe donnée.
-    Admin → tout
-    Resp. filière → toutes les classes de sa filière
-    Resp. classe → uniquement sa classe
+    Admin → tout | Resp. filière → sa filière | Resp. classe → sa classe
     """
     if not is_authenticated(session):
         return False
@@ -114,20 +153,19 @@ def can_manage_classe(session: dict, classe_id: int) -> bool:
         user_id = session.get("user_id")
 
         if is_resp_filiere(session):
-            # Vérifier que la classe appartient à sa filière
             resp = db.query(ResponsableFiliere).filter(
                 ResponsableFiliere.user_id == user_id
             ).first()
             if resp:
                 classe = db.query(Classe).filter(
-                    Classe.id == classe_id,
+                    Classe.id         == classe_id,
                     Classe.filiere_id == resp.filiere_id
                 ).first()
                 return classe is not None
 
         if is_resp_classe(session):
             resp = db.query(ResponsableClasse).filter(
-                ResponsableClasse.user_id == user_id,
+                ResponsableClasse.user_id   == user_id,
                 ResponsableClasse.classe_id == classe_id
             ).first()
             return resp is not None
@@ -154,12 +192,12 @@ def create_admin(nom: str, prenom: str, email: str, password: str):
             return None
 
         admin = User(
-            nom=nom,
-            prenom=prenom,
-            email=email,
-            password_hash=hash_password(password),
-            role=RoleEnum.admin,
-            is_active=True
+            nom           = nom,
+            prenom        = prenom,
+            email         = email,
+            password_hash = hash_password(password),
+            role          = RoleEnum.admin,
+            is_active     = True
         )
         db.add(admin)
         db.commit()
@@ -183,11 +221,6 @@ def require_auth(session: dict, required_roles: list = None):
     Vérifie l'authentification et le rôle.
     Retourne (True, None) si OK.
     Retourne (False, redirect_path) sinon.
-
-    Utilisation dans les callbacks Dash :
-        ok, redirect = require_auth(session, ["admin", "resp_filiere"])
-        if not ok:
-            return redirect
     """
     if not is_authenticated(session):
         return False, "/login"

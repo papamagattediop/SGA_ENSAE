@@ -329,6 +329,12 @@ def afficher_liste(classe_id, periode, session):
             "color": "#9ca3af", "fontFamily": "'Inter', sans-serif",
             "fontSize": "0.875rem", "textAlign": "center", "padding": "20px"
         }), "0"
+    if role == "eleve":
+        db = SessionLocal()
+        etudiant = db.query(Etudiant).filter(Etudiant.user_id == user_id).first()
+        db.close()
+        etudiants = get_etudiants_avec_stats(None, classe_ids_scope=[etudiant.classe_id])
+        etudiants = [e for e in etudiants if e["id"] == etudiant.id]
 
     items = []
     for e in etudiants:

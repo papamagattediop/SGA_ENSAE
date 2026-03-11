@@ -41,6 +41,10 @@ def get_classe_ids_for_user(role: str, user_id: int, db) -> list[int] | None:
             ResponsableClasse.user_id == user_id
         ).all()
         return [r.classe_id for r in rc_list]
+    
+    if role == "eleve":
+        etudiant = db.query(Etudiant).filter(Etudiant.user_id == user_id).first()
+        return [etudiant.classe_id] if etudiant else []
 
     return []
 
