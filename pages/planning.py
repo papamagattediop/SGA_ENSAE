@@ -30,17 +30,10 @@ JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"
 # ============================================================
 
 def get_classes_for_user(role: str, user_id: int) -> list:
-    """
-    Retourne les classes accessibles selon le rôle :
-    - admin         → toutes les classes
-    - resp_filiere  → classes de sa filière
-    - resp_classe   → uniquement sa/ses classe(s)
-    """
     db = SessionLocal()
     try:
         if role == "admin":
             classes = db.query(Classe).order_by(Classe.nom).all()
-
         elif role == "resp_filiere":
             rf = db.query(ResponsableFiliere).filter(
                 ResponsableFiliere.user_id == user_id
@@ -49,7 +42,6 @@ def get_classes_for_user(role: str, user_id: int) -> list:
             classes = db.query(Classe).filter(
                 Classe.filiere_id.in_(filiere_ids)
             ).order_by(Classe.nom).all()
-
         elif role == "resp_classe":
             rc = db.query(ResponsableClasse).filter(
                 ResponsableClasse.user_id == user_id
@@ -58,17 +50,14 @@ def get_classes_for_user(role: str, user_id: int) -> list:
             classes = db.query(Classe).filter(
                 Classe.id.in_(classe_ids)
             ).order_by(Classe.nom).all()
-
         else:
             classes = []
-
         return [{"label": c.nom, "value": c.id} for c in classes]
     finally:
         db.close()
 
 
-def get_classes():
-    """Toutes les classes — utilisé uniquement en admin."""
+def get_all_classes():
     db = SessionLocal()
     try:
         return [{"label": c.nom, "value": c.id} for c in db.query(Classe).all()]
@@ -90,38 +79,32 @@ def get_modules_by_classe(classe_id):
 def get_plannings(role, user_id, filtre_statut=None):
     """
     Retourne les plannings filtrés selon le rôle :
-    - admin         → tous les plannings
-    - resp_filiere  → plannings des classes de sa filière
-    - resp_classe   → plannings de ses classes uniquement
+    - admin        → tous les plannings
+    - resp_filiere → plannings des classes de sa filière
+    - resp_classe  → plannings de ses classes uniquement
     """
     db = SessionLocal()
     try:
         q = db.query(Planning)
 
         if role == "resp_classe":
-            # Récupérer les IDs de classes du resp. de classe
             rc_classes = db.query(ResponsableClasse).filter(
                 ResponsableClasse.user_id == user_id
             ).all()
             classe_ids = [rc.classe_id for rc in rc_classes]
-            # Plannings qui concernent au moins une de ses classes
             q = q.join(PlanningClasse).filter(
                 PlanningClasse.classe_id.in_(classe_ids)
             )
-
         elif role == "resp_filiere":
-            # Récupérer les IDs de filières du resp. de filière
             rf_list = db.query(ResponsableFiliere).filter(
                 ResponsableFiliere.user_id == user_id
             ).all()
             filiere_ids = [rf.filiere_id for rf in rf_list]
-            # Classes de ces filières
             classe_ids = [
                 c.id for c in db.query(Classe).filter(
                     Classe.filiere_id.in_(filiere_ids)
                 ).all()
             ]
-            # Plannings qui concernent au moins une de ces classes
             q = q.join(PlanningClasse).filter(
                 PlanningClasse.classe_id.in_(classe_ids)
             )
@@ -158,13 +141,14 @@ def get_planning_detail(planning_id):
         seances = []
         for s in p.planning_seances:
             seances.append({
-                "module"     : s.module.libelle if s.module else "-",
-                "enseignant" : s.module.enseignant if s.module and s.module.enseignant else "",
-                "code"       : s.module.code if s.module else "-",
-                "date"       : s.date.strftime("%d/%m/%Y") if s.date else "-",
-                "heure_debut": s.heure_debut.strftime("%H:%M") if s.heure_debut else "-",
-                "heure_fin"  : s.heure_fin.strftime("%H:%M") if s.heure_fin else "-",
-                "jour"       : JOURS[s.date.weekday()] if s.date else "-",
+                "module"          : s.module.libelle if s.module else "-",
+                "enseignant"      : s.module.enseignant if s.module and s.module.enseignant else "",
+                "email_enseignant": s.module.email_enseignant if s.module and s.module.email_enseignant else "",
+                "code"            : s.module.code if s.module else "-",
+                "date"            : s.date.strftime("%d/%m/%Y") if s.date else "-",
+                "heure_debut"     : s.heure_debut.strftime("%H:%M") if s.heure_debut else "-",
+                "heure_fin"       : s.heure_fin.strftime("%H:%M") if s.heure_fin else "-",
+                "jour"            : JOURS[s.date.weekday()] if s.date else "-",
             })
         seances.sort(key=lambda x: x["date"])
         return {
@@ -210,7 +194,7 @@ def get_resp_classe_emails(planning_id) -> list:
         if not p:
             return []
 
-        destinataires = {}  # email -> nom
+        destinataires = {}
 
         # 1. Délégués titulaires des classes du planning
         for pc in p.planning_classes:
@@ -229,7 +213,7 @@ def get_resp_classe_emails(planning_id) -> list:
             if u.email not in destinataires:
                 destinataires[u.email] = f"{u.prenom} {u.nom}"
 
-        return list(destinataires.items())   # [(email, nom), ...]
+        return list(destinataires.items())
     finally:
         db.close()
 
@@ -256,68 +240,88 @@ def prochain_lundi():
 def _get_seances_list(planning) -> list:
     """
     Construit la liste de dicts de séances depuis un objet Planning ORM.
-    Doit être appelé pendant que la session est encore active.
+    Doit être appelé pendant que la session DB est encore active.
+
+    MODIFIÉ : ajout de email_enseignant dans chaque dict de séance.
     """
     seances = []
     for s in sorted(planning.planning_seances,
                     key=lambda x: (x.date, x.heure_debut)):
         seances.append({
-            "module"     : s.module.libelle if s.module else "-",
-            "enseignant" : s.module.enseignant if s.module and s.module.enseignant else "",
-            "date"       : s.date.strftime("%d/%m/%Y") if s.date else "-",
-            "jour"       : JOURS[s.date.weekday()] if s.date else "-",
-            "heure_debut": s.heure_debut.strftime("%H:%M") if s.heure_debut else "-",
-            "heure_fin"  : s.heure_fin.strftime("%H:%M") if s.heure_fin else "-",
+            "module"          : s.module.libelle if s.module else "-",
+            "enseignant"      : s.module.enseignant if s.module and s.module.enseignant else "",
+            # ← NOUVEAU : email direct depuis la table modules (plus fiable que recherche par nom)
+            "email_enseignant": s.module.email_enseignant if s.module and s.module.email_enseignant else "",
+            "date"            : s.date.strftime("%d/%m/%Y") if s.date else "-",
+            "jour"            : JOURS[s.date.weekday()] if s.date else "-",
+            "heure_debut"     : s.heure_debut.strftime("%H:%M") if s.heure_debut else "-",
+            "heure_fin"       : s.heure_fin.strftime("%H:%M") if s.heure_fin else "-",
         })
     return seances
 
 
 def _notifier_professeurs(seances_list: list, classe_n: str, semaine: str) -> None:
     """
-    Envoie un email individuel à chaque enseignant présent dans le planning.
-    Reçoit directement la liste de dicts (déjà construite pendant la session ORM).
+    Envoie un email individuel à chaque enseignant concerné lors de la validation.
+
+    MODIFIÉ : utilise directement email_enseignant stocké dans le dict de séance,
+    éliminant la recherche floue par correspondance de nom/prénom dans la table users
+    (qui échouait souvent en cas de différences de casse ou d'espace).
+
+    Fallback : si email_enseignant est vide, on tente la recherche par nom dans users
+    pour compatibilité avec les anciens modules sans email renseigné.
     """
     from utils.mailer import email_planning_prof
 
-    # Regrouper par enseignant
-    profs: dict[str, list] = {}
+    # Regrouper les séances par email d'enseignant (dédupliqué)
+    profs: dict[str, dict] = {}   # email -> {nom, seances}
+
     for s in seances_list:
-        nom_prof = (s.get("enseignant") or "").strip()
-        if not nom_prof:
-            continue
-        profs.setdefault(nom_prof, []).append(s)
+        email_ens = (s.get("email_enseignant") or "").strip()
+        nom_ens   = (s.get("enseignant") or "").strip()
+
+        if not nom_ens:
+            continue  # pas d'enseignant renseigné → ignorer
+
+        if email_ens:
+            # ← CAS NOMINAL : email direct disponible
+            if email_ens not in profs:
+                profs[email_ens] = {"nom": nom_ens, "seances": []}
+            profs[email_ens]["seances"].append(s)
+        else:
+            # ← FALLBACK : recherche par nom dans la table users
+            # (pour anciens modules sans email_enseignant renseigné)
+            db = SessionLocal()
+            try:
+                all_users = db.query(User).filter(User.is_active == True).all()
+                nom_lower = nom_ens.lower()
+                for u in all_users:
+                    full1 = f"{u.prenom} {u.nom}".strip().lower()
+                    full2 = f"{u.nom} {u.prenom}".strip().lower()
+                    if nom_lower in (full1, full2):
+                        key = u.email
+                        if key not in profs:
+                            profs[key] = {"nom": f"{u.prenom} {u.nom}", "seances": []}
+                        profs[key]["seances"].append(s)
+                        break
+            finally:
+                db.close()
 
     if not profs:
         return
 
-    # Chercher les emails dans la table users par correspondance nom/prénom
-    db = SessionLocal()
-    try:
-        all_users = db.query(User).filter(User.is_active == True).all()
-        user_email_map: dict[str, tuple[str, str]] = {}
-        for u in all_users:
-            full1 = f"{u.prenom} {u.nom}".strip().lower()
-            full2 = f"{u.nom} {u.prenom}".strip().lower()
-            display = f"{u.prenom} {u.nom}".strip()
-            user_email_map[full1] = (u.email, display)
-            user_email_map[full2] = (u.email, display)
-
-        for nom_prof, seances_prof in profs.items():
-            match = user_email_map.get(nom_prof.strip().lower())
-            if match:
-                email_prof, display = match
-                try:
-                    email_planning_prof(
-                        to           = email_prof,
-                        nom_prof     = display,
-                        classe       = classe_n,
-                        semaine      = semaine,
-                        seances_prof = seances_prof,
-                    )
-                except Exception:
-                    pass   # ne jamais bloquer le workflow pour un email raté
-    finally:
-        db.close()
+    # Envoyer un email par enseignant avec ses séances uniquement
+    for email_prof, data in profs.items():
+        try:
+            email_planning_prof(
+                to           = email_prof,
+                nom_prof     = data["nom"],
+                classe       = classe_n,
+                semaine      = semaine,
+                seances_prof = data["seances"],
+            )
+        except Exception:
+            pass   # ne jamais bloquer le workflow pour un email raté
 
 
 # ============================================================
@@ -326,10 +330,10 @@ def _notifier_professeurs(seances_list: list, classe_n: str, semaine: str) -> No
 
 def statut_badge(statut: str) -> html.Span:
     configs = {
-        "brouillon": ("#6b7280", "#f3f4f6", "Brouillon"),
-        "soumis"   : (BLEU,     "#dbeafe",  "Soumis"),
-        "modifie"  : ("#d97706", "#fef3c7", "Modifié"),
-        "valide"   : (VERT,     "#d1fae5",  "Validé"),
+        "brouillon": ("#6b7280", "#f3f4f6",  "Brouillon"),
+        "soumis"   : (BLEU,     "#dbeafe",   "Soumis"),
+        "modifie"  : ("#d97706", "#fef3c7",  "Modifié"),
+        "valide"   : (VERT,     "#d1fae5",   "Validé"),
         "rejete"   : ("#ef4444", "#fee2e2",  "Rejeté"),
     }
     color, bg, label = configs.get(statut, ("#6b7280", "#f3f4f6", statut))
@@ -380,6 +384,69 @@ def btn_outline(label, btn_id, color="#6b7280"):
     })
 
 
+def _render_detail_content(detail: dict):
+    """Rendu HTML du détail d'un planning (sans les boutons d'action)."""
+    seances = detail.get("seances", [])
+    rows = []
+    for s in seances:
+        rows.append(html.Tr([
+            html.Td(s["jour"],       style={"padding": "8px 10px", "fontSize": "0.82rem", "color": "#6b7280"}),
+            html.Td(s["date"],       style={"padding": "8px 10px", "fontSize": "0.82rem", "color": "#6b7280"}),
+            html.Td(s["module"],     style={"padding": "8px 10px", "fontSize": "0.82rem", "color": "#374151", "fontWeight": "500"}),
+            html.Td(s["enseignant"] or "—", style={"padding": "8px 10px", "fontSize": "0.82rem", "color": "#6b7280"}),
+            html.Td(f"{s['heure_debut']} – {s['heure_fin']}", style={"padding": "8px 10px", "fontSize": "0.82rem", "color": "#6b7280", "whiteSpace": "nowrap"}),
+        ], style={"borderBottom": "1px solid #f3f4f6"}))
+
+    tableau = html.Table(
+        style={"width": "100%", "borderCollapse": "collapse", "marginTop": "12px"},
+        children=[
+            html.Thead(html.Tr([
+                html.Th(col, style={"padding": "8px 10px", "textAlign": "left", "color": BLEU,
+                                    "fontWeight": "700", "fontSize": "0.72rem",
+                                    "textTransform": "uppercase", "borderBottom": "2px solid #e5e7eb"})
+                for col in ["Jour", "Date", "Module", "Enseignant", "Horaire"]
+            ])),
+            html.Tbody(rows if rows else [
+                html.Tr(html.Td("Aucune séance.", colSpan=5,
+                                style={"padding": "16px", "textAlign": "center",
+                                       "color": "#9ca3af", "fontStyle": "italic"}))
+            ])
+        ]
+    )
+
+    classes_str = ", ".join(detail.get("classes", []))
+    commentaire = detail.get("commentaire", "")
+
+    return html.Div([
+        html.Div(style={"display": "flex", "gap": "12px", "alignItems": "center", "marginBottom": "8px"}, children=[
+            html.Span(f"Semaine du {detail['semaine']}", style={
+                "fontFamily": "'Montserrat', sans-serif", "fontWeight": "700",
+                "fontSize": "0.95rem", "color": BLEU
+            }),
+            statut_badge(detail["statut"]),
+        ]),
+        html.P(f"Classe(s) : {classes_str}", style={
+            "color": "#6b7280", "fontSize": "0.82rem",
+            "fontFamily": "'Inter', sans-serif", "margin": "0 0 4px"
+        }),
+        html.P(f"Créé le {detail['created_at']}", style={
+            "color": "#9ca3af", "fontSize": "0.75rem",
+            "fontFamily": "'Inter', sans-serif", "margin": "0 0 8px"
+        }),
+        tableau,
+        html.Div(
+            [html.Strong("Commentaire : "), commentaire],
+            style={
+                "marginTop": "12px", "padding": "10px 14px",
+                "background": "#fffbeb", "borderRadius": "8px",
+                "border": "1px solid #fde68a",
+                "fontSize": "0.82rem", "fontFamily": "'Inter', sans-serif",
+                "color": "#374151", "display": "block" if commentaire else "none"
+            }
+        )
+    ])
+
+
 # ============================================================
 #  LAYOUT
 # ============================================================
@@ -428,27 +495,23 @@ layout = html.Div([
                     {"label": "Brouillon", "value": "brouillon"},
                     {"label": "Soumis",    "value": "soumis"},
                     {"label": "Validé",    "value": "valide"},
-                    {"label": "Rejeté",    "value": "rejete"},
                     {"label": "Modifié",   "value": "modifie"},
+                    {"label": "Rejeté",    "value": "rejete"},
                 ],
-                value="tous",
                 style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"}
             )
         ]),
-        html.Div(
-            id="planning-btn-container",
-            style={"display": "flex", "gap": "8px"}
-        ),
+        html.Div(id="planning-btn-container"),
     ]),
 
-    # -- Contenu principal --
+    # -- Corps : liste + détail --
     dbc.Row([
         # Colonne liste
         dbc.Col(
             html.Div(style={
                 "background": "#ffffff", "borderRadius": "12px",
                 "padding": "20px", "border": "1px solid #e5e7eb",
-                "height": "100%"
+                "height": "100%", "display": "flex", "flexDirection": "column"
             }, children=[
                 html.Div(style={
                     "display": "flex", "justifyContent": "space-between",
@@ -461,20 +524,27 @@ layout = html.Div([
                     html.Span(id="planning-nb", style={
                         "background": f"{BLEU}15", "color": BLEU,
                         "padding": "2px 10px", "borderRadius": "999px",
-                        "fontSize": "0.75rem", "fontWeight": "700"
-                    }),
+                        "fontSize": "0.72rem", "fontWeight": "700",
+                        "fontFamily": "'Montserrat', sans-serif"
+                    })
                 ]),
-                html.Div(id="planning-liste"),
+                html.Div(id="planning-liste",
+                         style={"flex": "1", "overflowY": "auto", "maxHeight": "560px"})
             ]),
             md=4
         ),
+
         # Colonne détail
         dbc.Col(
             html.Div(style={
                 "background": "#ffffff", "borderRadius": "12px",
-                "padding": "20px", "border": "1px solid #e5e7eb",
+                "padding": "24px", "border": "1px solid #e5e7eb",
                 "height": "100%"
             }, children=[
+                html.H6("Détail du planning", style={
+                    "fontFamily": "'Montserrat', sans-serif",
+                    "fontWeight": "700", "color": BLEU, "marginBottom": "14px"
+                }),
                 html.Div(id="planning-detail", children=[
                     html.P("Sélectionnez un planning pour voir le détail.", style={
                         "color": "#9ca3af", "fontFamily": "'Inter', sans-serif",
@@ -509,16 +579,12 @@ layout = html.Div([
                 multi=True,
                 style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"}
             )),
-
             html.Hr(style={"borderColor": "#e5e7eb"}),
             html.H6("Séances de la semaine", style={
                 "fontFamily": "'Montserrat', sans-serif",
                 "fontWeight": "700", "color": BLEU, "marginBottom": "12px"
             }),
-
-            # Lignes séances dynamiques
             html.Div(id="planning-seances-container"),
-
             html.Button(
                 "+ Ajouter une séance",
                 id="btn-add-seance-planning",
@@ -565,13 +631,6 @@ layout = html.Div([
         ])
     ], id="modal-validation", is_open=False, size="lg"),
 
-    # Boutons d'action statiques (cachés par défaut, rendus visibles par callback)
-    # Nécessaire car Dash exige que les Input/State existent dans le layout statique
-    html.Div(id="planning-actions-container", style={"display": "none"}, children=[
-        html.Button("Valider / Rejeter", id="btn-open-validation",    n_clicks=0),
-        html.Button("Soumettre",         id="btn-soumettre-planning", n_clicks=0),
-    ]),
-
     html.Div(id="planning-dummy", style={"display": "none"})
 ])
 
@@ -581,7 +640,7 @@ layout = html.Div([
 # ============================================================
 
 @callback(
-    Output("planning-session",      "data"),
+    Output("planning-session",       "data"),
     Output("planning-btn-container", "children"),
     Input("session-store", "data")
 )
@@ -685,8 +744,8 @@ def add_seance_row(n, nb):
 def afficher_plannings(filtre, _, session):
     if not session:
         return html.Div(), "0"
-    role    = session.get("role", "")
-    user_id = session.get("user_id")
+    role      = session.get("role", "")
+    user_id   = session.get("user_id")
     plannings = get_plannings(role, user_id, filtre)
 
     if not plannings:
@@ -698,45 +757,35 @@ def afficher_plannings(filtre, _, session):
     items = [
         html.Div(
             id={"type": "planning-item", "index": p["id"]},
+            n_clicks=0,
             style={
                 "padding": "12px 14px", "borderRadius": "8px",
                 "border": "1px solid #e5e7eb", "marginBottom": "8px",
-                "cursor": "pointer", "background": "#fafafa",
-                "transition": "border-color 0.2s"
+                "cursor": "pointer", "background": "#fafafa"
             },
             children=[
-                html.Div(style={
-                    "display": "flex", "justifyContent": "space-between",
-                    "alignItems": "center", "marginBottom": "6px"
-                }, children=[
-                    html.Div([
-                        html.Span("Semaine du ", style={
-                            "color": "#9ca3af", "fontSize": "0.72rem",
-                            "fontFamily": "'Inter', sans-serif"
-                        }),
-                        html.Span(p["semaine"], style={
-                            "fontWeight": "700", "color": "#111827",
-                            "fontSize": "0.875rem", "fontFamily": "'Montserrat', sans-serif"
-                        }),
-                    ]),
-                    statut_badge(p["statut"])
+                html.Div(style={"display": "flex", "justifyContent": "space-between",
+                                "alignItems": "center", "marginBottom": "4px"}, children=[
+                    html.Span(f"Semaine du {p['semaine']}", style={
+                        "fontFamily": "'Inter', sans-serif",
+                        "fontWeight": "600", "fontSize": "0.875rem", "color": BLEU
+                    }),
+                    statut_badge(p["statut"]),
                 ]),
-                html.Div(style={"display": "flex", "gap": "10px", "flexWrap": "wrap"}, children=[
-                    html.Span(p["classes"] or "Aucune classe", style={
-                        "background": f"{BLEU}10", "color": BLEU,
-                        "padding": "1px 7px", "borderRadius": "4px",
-                        "fontSize": "0.7rem", "fontFamily": "'Inter', sans-serif",
-                        "fontWeight": "500"
+                html.Div(style={"display": "flex", "justifyContent": "space-between"}, children=[
+                    html.Span(p["classes"] or "-", style={
+                        "color": "#6b7280", "fontSize": "0.75rem",
+                        "fontFamily": "'Inter', sans-serif"
                     }),
                     html.Span(f"{p['nb_seances']} séance(s)", style={
-                        "color": "#6b7280", "fontSize": "0.7rem",
+                        "color": "#9ca3af", "fontSize": "0.72rem",
                         "fontFamily": "'Inter', sans-serif"
                     }),
-                    html.Span(f"Créé le {p['created_at']}", style={
-                        "color": "#9ca3af", "fontSize": "0.7rem",
-                        "fontFamily": "'Inter', sans-serif"
-                    }),
-                ])
+                ]),
+                html.Span(f"Créé le {p['created_at']}", style={
+                    "color": "#9ca3af", "fontSize": "0.7rem",
+                    "fontFamily": "'Inter', sans-serif"
+                }),
             ]
         )
         for p in plannings
@@ -745,11 +794,11 @@ def afficher_plannings(filtre, _, session):
 
 
 @callback(
-    Output("planning-detail",        "children"),
-    Output("planning-detail-id",     "data"),
+    Output("planning-detail",            "children"),
+    Output("planning-detail-id",         "data"),
     Output("planning-actions-container", "style"),
-    Output("btn-open-validation",    "style"),
-    Output("btn-soumettre-planning", "style"),
+    Output("btn-open-validation",        "style"),
+    Output("btn-soumettre-planning",     "style"),
     Input({"type": "planning-item", "index": dash.ALL}, "n_clicks"),
     State("planning-session", "data"),
     prevent_initial_call=True
@@ -765,7 +814,6 @@ def afficher_detail(n_clicks, session):
 
     role = session.get("role", "") if session else ""
 
-    # Styles des boutons selon statut et rôle
     btn_style_base = {
         "border": "none", "borderRadius": "8px", "padding": "8px 16px",
         "fontFamily": "'Montserrat', sans-serif", "fontWeight": "600",
@@ -781,107 +829,9 @@ def afficher_detail(n_clicks, session):
     style_container = {"display": "flex", "gap": "8px", "marginTop": "12px"} \
                       if (show_valider or show_soumettre) else {"display": "none"}
 
-    contenu_detail = _render_detail_content(detail)
-    return contenu_detail, planning_id, style_container, style_valider, style_soumettre
+    return _render_detail_content(detail), planning_id, style_container, style_valider, style_soumettre
 
 
-def _render_detail_content(detail: dict):
-    """Rendu HTML du détail d'un planning (sans les boutons d'action)."""
-    return html.Div([
-        # Header détail
-        html.Div(style={
-            "background": f"{BLEU}08", "borderRadius": "8px",
-            "padding": "14px 16px", "marginBottom": "16px",
-            "display": "flex", "justifyContent": "space-between", "alignItems": "center"
-        }, children=[
-            html.Div([
-                html.Span("Semaine du ", style={
-                    "color": "#9ca3af", "fontSize": "0.75rem",
-                    "fontFamily": "'Inter', sans-serif"
-                }),
-                html.Span(detail["semaine"], style={
-                    "fontWeight": "800", "color": BLEU,
-                    "fontFamily": "'Montserrat', sans-serif"
-                }),
-                html.Div(", ".join(detail["classes"]), style={
-                    "color": "#6b7280", "fontSize": "0.78rem",
-                    "fontFamily": "'Inter', sans-serif", "marginTop": "2px"
-                }),
-            ]),
-            statut_badge(detail["statut"]),
-        ]),
-
-        # Commentaire si présent
-        html.Div(style={
-            "background": "#fffbeb", "border": "1px solid #fde68a",
-            "borderRadius": "8px", "padding": "10px 14px", "marginBottom": "16px",
-            "fontSize": "0.82rem", "color": "#92400e",
-            "fontFamily": "'Inter', sans-serif",
-            "display": "block" if detail["commentaire"] else "none"
-        }, children=f"💬 {detail['commentaire']}"),
-
-        # Tableau séances
-        html.H6("Séances programmées", style={
-            "fontFamily": "'Montserrat', sans-serif",
-            "fontWeight": "700", "color": BLEU,
-            "fontSize": "0.85rem", "marginBottom": "10px"
-        }),
-
-        html.Table(
-            style={"width": "100%", "borderCollapse": "collapse",
-                   "fontSize": "0.82rem", "fontFamily": "'Inter', sans-serif"},
-            children=[
-                html.Thead(html.Tr([
-                    html.Th("Jour",       style={"padding": "8px 10px", "textAlign": "left",
-                                                  "color": BLEU, "fontWeight": "700",
-                                                  "fontSize": "0.72rem", "textTransform": "uppercase",
-                                                  "borderBottom": "2px solid #e5e7eb"}),
-                    html.Th("Date",       style={"padding": "8px 10px", "textAlign": "left",
-                                                  "color": BLEU, "fontWeight": "700",
-                                                  "fontSize": "0.72rem", "textTransform": "uppercase",
-                                                  "borderBottom": "2px solid #e5e7eb"}),
-                    html.Th("Module",     style={"padding": "8px 10px", "textAlign": "left",
-                                                  "color": BLEU, "fontWeight": "700",
-                                                  "fontSize": "0.72rem", "textTransform": "uppercase",
-                                                  "borderBottom": "2px solid #e5e7eb"}),
-                    html.Th("Enseignant", style={"padding": "8px 10px", "textAlign": "left",
-                                                  "color": BLEU, "fontWeight": "700",
-                                                  "fontSize": "0.72rem", "textTransform": "uppercase",
-                                                  "borderBottom": "2px solid #e5e7eb"}),
-                    html.Th("Horaire",    style={"padding": "8px 10px", "textAlign": "left",
-                                                  "color": BLEU, "fontWeight": "700",
-                                                  "fontSize": "0.72rem", "textTransform": "uppercase",
-                                                  "borderBottom": "2px solid #e5e7eb"}),
-                ])),
-                html.Tbody([
-                    html.Tr(
-                        style={"borderBottom": "1px solid #f3f4f6",
-                               "background": "#fafafa" if i % 2 == 0 else "#ffffff"},
-                        children=[
-                            html.Td(s["jour"],       style={"padding": "8px 10px", "color": "#6b7280"}),
-                            html.Td(s["date"],       style={"padding": "8px 10px", "color": "#374151",
-                                                             "whiteSpace": "nowrap"}),
-                            html.Td(s["module"],     style={"padding": "8px 10px", "color": "#111827",
-                                                             "fontWeight": "500"}),
-                            html.Td(s.get("enseignant") or "—",
-                                                     style={"padding": "8px 10px", "color": "#6b7280"}),
-                            html.Td(f"{s['heure_debut']} – {s['heure_fin']}",
-                                                     style={"padding": "8px 10px", "color": "#6b7280",
-                                                             "whiteSpace": "nowrap"}),
-                        ]
-                    )
-                    for i, s in enumerate(detail["seances"])
-                ]) if detail["seances"] else html.Tbody(html.Tr(
-                    html.Td("Aucune séance enregistrée.", colSpan=5,
-                            style={"padding": "16px", "textAlign": "center",
-                                   "color": "#9ca3af", "fontStyle": "italic"})
-                ))
-            ]
-        ),
-    ])
-
-
-# -- Modals --
 @callback(
     Output("modal-planning", "is_open"),
     Input("btn-open-planning",   "n_clicks"),
@@ -905,6 +855,19 @@ def toggle_modal_planning(o, c, b, s):
 )
 def toggle_modal_validation(o, c, v, r, m):
     return ctx.triggered_id == "btn-open-validation"
+
+
+@callback(
+    Output("modal-validation-content", "children"),
+    Input("planning-detail-id",        "data"),
+)
+def remplir_modal_validation(planning_id):
+    if not planning_id:
+        return html.Div()
+    detail = get_planning_detail(planning_id)
+    if not detail:
+        return html.Div()
+    return _render_detail_content(detail)
 
 
 @callback(
@@ -947,11 +910,9 @@ def save_planning(nb, ns, semaine, classes, modules, dates, debuts, fins, sessio
         db.add(planning)
         db.flush()
 
-        # Classes
         for cid in classes:
             db.add(PlanningClasse(planning_id=planning.id, classe_id=cid))
 
-        # Séances
         for mod, dat, deb, fin in zip(modules, dates, debuts, fins):
             if not all([mod, dat, deb, fin]):
                 continue
@@ -965,22 +926,20 @@ def save_planning(nb, ns, semaine, classes, modules, dates, debuts, fins, sessio
 
         db.commit()
 
-        # Envoyer emails si soumis
+        # Emails si soumis
         if statut == StatutPlanningEnum.soumis and classes:
             try:
                 from utils.mailer import email_planning_soumis, email_planning_confirmation_rc
 
-                # Recharger le planning avec ses relations pour construire les séances
                 db.refresh(planning)
                 seances_list = _get_seances_list(planning)
 
-                user     = db.query(User).filter(User.id == session.get("user_id")).first()
-                nom_rc   = f"{user.prenom} {user.nom}" if user else "Responsable"
-                classe_n = db.query(Classe).filter(Classe.id == classes[0]).first()
+                user       = db.query(User).filter(User.id == session.get("user_id")).first()
+                nom_rc     = f"{user.prenom} {user.nom}" if user else "Responsable"
+                classe_n   = db.query(Classe).filter(Classe.id == classes[0]).first()
                 nom_classe = classe_n.nom if classe_n else "-"
                 semaine_str = semaine_date.strftime("%d/%m/%Y")
 
-                # Email au resp. filière
                 email_resp, nom_resp = get_resp_filiere_email(classes[0])
                 if email_resp:
                     email_planning_soumis(
@@ -993,14 +952,14 @@ def save_planning(nb, ns, semaine, classes, modules, dates, debuts, fins, sessio
                         planning_id      = planning.id,
                     )
 
-                # Email de confirmation au resp. de classe (créateur)
-                if user and user.email:
+                destinataires = get_resp_classe_emails(planning.id)
+                for email_rc, nom_dest in destinataires:
                     email_planning_confirmation_rc(
-                        to          = user.email,
-                        nom_rc      = nom_rc,
-                        classe      = nom_classe,
-                        semaine     = semaine_str,
-                        seances     = seances_list,
+                        to      = email_rc,
+                        nom_rc  = nom_dest,
+                        classe  = nom_classe,
+                        semaine = semaine_str,
+                        seances = seances_list,
                     )
             except Exception:
                 pass
@@ -1050,15 +1009,14 @@ def valider_rejeter_planning(v, r, m, planning_id, commentaire):
         planning.updated_at  = datetime.now()
         db.commit()
 
-        # Email notification
         try:
             from utils.mailer import (
                 email_planning_valide, email_planning_rejete, email_planning_modifie
             )
             destinataires = get_resp_classe_emails(planning_id)
-            classes  = [pc.classe.nom for pc in planning.planning_classes if pc.classe]
-            classe_n = classes[0] if classes else "-"
-            semaine  = planning.semaine.strftime("%d/%m/%Y") if planning.semaine else "-"
+            classes       = [pc.classe.nom for pc in planning.planning_classes if pc.classe]
+            classe_n      = classes[0] if classes else "-"
+            semaine       = planning.semaine.strftime("%d/%m/%Y") if planning.semaine else "-"
 
             # Construire la liste des séances AVANT db.close()
             seances_list = _get_seances_list(planning)
@@ -1074,7 +1032,7 @@ def valider_rejeter_planning(v, r, m, planning_id, commentaire):
                 elif ctx.triggered_id == "btn-modifier":
                     email_planning_modifie(email_rc, nom_rc, classe_n, semaine, commentaire)
 
-            # Notifier les professeurs uniquement à la validation
+            # Notifier les professeurs UNIQUEMENT à la validation
             if ctx.triggered_id == "btn-valider":
                 _notifier_professeurs(seances_list, classe_n, semaine)
 
@@ -1110,7 +1068,6 @@ def soumettre_planning(n, planning_id, session):
         planning.updated_at = datetime.now()
         db.commit()
 
-        # Emails : resp. filière + confirmation au resp. de classe
         try:
             from utils.mailer import email_planning_soumis, email_planning_confirmation_rc
             db.refresh(planning)
@@ -1118,13 +1075,12 @@ def soumettre_planning(n, planning_id, session):
 
             classes_ids = [pc.classe_id for pc in planning.planning_classes]
             if classes_ids:
-                classe_n = db.query(Classe).filter(Classe.id == classes_ids[0]).first()
+                classe_n    = db.query(Classe).filter(Classe.id == classes_ids[0]).first()
                 nom_classe  = classe_n.nom if classe_n else "-"
                 semaine_str = planning.semaine.strftime("%d/%m/%Y") if planning.semaine else "-"
                 user        = db.query(User).filter(User.id == session.get("user_id")).first()
                 nom_rc      = f"{user.prenom} {user.nom}" if user else "Responsable"
 
-                # Email au resp. filière
                 email_resp, nom_resp = get_resp_filiere_email(classes_ids[0])
                 if email_resp:
                     email_planning_soumis(
@@ -1137,7 +1093,6 @@ def soumettre_planning(n, planning_id, session):
                         planning_id      = planning.id,
                     )
 
-                # Confirmation au resp. de classe (créateur ou délégué)
                 destinataires = get_resp_classe_emails(planning.id)
                 for email_rc, nom_dest in destinataires:
                     email_planning_confirmation_rc(

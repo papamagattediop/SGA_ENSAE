@@ -62,7 +62,6 @@ def migrate_filieres(df: pd.DataFrame) -> tuple:
     err  = []
     warn = []
     try:
-        # Charger tous les codes existants en mémoire
         codes_existants = {f.code.upper() for f in db.query(Filiere).all()}
 
         for idx, row in df.iterrows():
@@ -73,12 +72,10 @@ def migrate_filieres(df: pd.DataFrame) -> tuple:
                 if code in codes_existants:
                     warn.append(f"Filiere '{code}' deja en base — ignoree.")
                     continue
-                db.add(Filiere(
-                    code      = code,
-                    libelle   = str(row["Libelle"]).strip(),
-                    duree_ans = int(row["Duree_ans"])
-                ))
-                codes_existants.add(code)   # eviter doublons dans le meme fichier
+                libelle   = str(row.get("Libelle", "")).strip()
+                duree_ans = int(row.get("Duree_ans", 3))
+                db.add(Filiere(code=code, libelle=libelle, duree_ans=duree_ans))
+                codes_existants.add(code)
                 nb += 1
             except Exception as e:
                 err.append(f"Filiere ligne {idx + 2} : {str(e)}")
@@ -97,34 +94,29 @@ def migrate_filieres(df: pd.DataFrame) -> tuple:
 
 def migrate_classes(df: pd.DataFrame) -> tuple:
     """
-    Colonnes attendues : Nom, Code_Filiere, Niveau, Is_Commune (0/1), Annee_Scolaire
-    Logique : si (nom.lower, annee) existe déjà → ignorer
+    Colonnes attendues : Nom, Code_Filiere, Niveau, Is_Commune, Annee_Scolaire
     """
     db   = SessionLocal()
     nb   = 0
     err  = []
     warn = []
     try:
-        # Charger toutes les clés (nom_lower, annee) existantes en mémoire
-        # Clé unique = nom seulement (indépendant de l'année scolaire)
+        fil_map    = {f.code.upper(): f.id for f in db.query(Filiere).all()}
         existantes = {c.nom.strip().lower() for c in db.query(Classe).all()}
-        # Map code filiere → id
-        fil_map = {f.code.upper(): f.id for f in db.query(Filiere).all()}
 
         for idx, row in df.iterrows():
             try:
-                nom      = str(row.get("Nom", "")).strip()
-                annee    = str(row.get("Annee_Scolaire", "")).strip()
-                code_fil = str(row.get("Code_Filiere", "")).strip().upper()
-
-                if not nom or nom.upper() == "NAN" or nom.startswith("#"):
+                nom = str(row.get("Nom", "")).strip()
+                if not nom or nom.startswith("#"):
                     continue
 
+                code_fil = str(row.get("Code_Filiere", "")).strip().upper()
                 if code_fil not in fil_map:
                     err.append(f"Filiere '{code_fil}' introuvable pour classe '{nom}'.")
                     continue
 
-                # Verif par nom uniquement (pas l'année)
+                annee = str(row.get("Annee_Scolaire", "")).strip()
+
                 if nom.lower() in existantes:
                     warn.append(f"Classe '{nom}' deja en base — ignoree.")
                     continue
@@ -136,7 +128,7 @@ def migrate_classes(df: pd.DataFrame) -> tuple:
                     is_commune     = bool(int(row.get("Is_Commune", 0))),
                     annee_scolaire = annee
                 ))
-                existantes.add(nom.lower())   # eviter doublons dans le meme fichier
+                existantes.add(nom.lower())
                 nb += 1
             except Exception as e:
                 err.append(f"Classe ligne {idx + 2} : {str(e)}")
@@ -158,19 +150,27 @@ def migrate_etudiants(df: pd.DataFrame) -> tuple:
     Colonnes attendues :
     Matricule, Nom, Prenom, Email, Date_Naissance,
     Nom_Classe, Annee_Scolaire, Filiere_Origine
+    Mot_de_passe (optionnel — défaut = matricule)
+
+    MODIFIÉ :
+      - Lecture de Mot_de_passe (colonne optionnelle)
+      - Si absent ou vide → mot de passe = matricule
+      - Envoi email de bienvenue après création du compte
     """
     db   = SessionLocal()
     nb   = 0
     err  = []
     warn = []
     try:
-        # Charger les sets existants en mémoire
         mats_existants   = {e.matricule for e in db.query(Etudiant).all()}
         emails_existants = {u.email.lower() for u in db.query(User).all()}
-        # Map (nom_lower, annee) → classe_id
-        # Map nom_lower → classe_id (indépendant de l'année)
         cls_map = {
             c.nom.strip().lower(): c.id
+            for c in db.query(Classe).all()
+        }
+        # Charger les noms de classes pour l'email de bienvenue
+        cls_nom_map = {
+            c.id: c.nom
             for c in db.query(Classe).all()
         }
 
@@ -196,51 +196,61 @@ def migrate_etudiants(df: pd.DataFrame) -> tuple:
                     err.append(f"Classe '{nom_classe}' introuvable pour '{matricule}'.")
                     continue
 
-                # ── Parsing date robuste ──────────────────────────
+                # Parsing date de naissance
                 date_naissance = None
-                val_date = row.get("Date_Naissance")
-                if val_date is not None and val_date != "" and pd.notna(val_date):
-                    # Cas 1 : déjà un datetime/date (Excel natif)
-                    if hasattr(val_date, "date"):
-                        date_naissance = val_date.date()
-                    elif hasattr(val_date, "year"):
-                        date_naissance = val_date
-                    else:
-                        # Cas 2 : string — essayer plusieurs formats
-                        s = str(val_date).strip()
-                        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y",
-                                    "%d/%m/%y", "%Y/%m/%d"):
-                            try:
-                                date_naissance = datetime.strptime(s, fmt).date()
-                                break
-                            except ValueError:
-                                continue
-                        if date_naissance is None:
-                            warn.append(f"Format de date non reconnu pour '{matricule}' "
-                                        f"(valeur: '{s}') — date ignoree.")
+                raw_date = str(row.get("Date_Naissance", "")).strip()
+                if raw_date and raw_date.upper() != "NAN":
+                    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+                        try:
+                            date_naissance = datetime.strptime(raw_date, fmt).date()
+                            break
+                        except ValueError:
+                            continue
+
+                # ── MODIFIÉ : lecture Mot_de_passe avec défaut = matricule ──
+                mdp_brut = str(row.get("Mot_de_passe", "")).strip()
+                if not mdp_brut or mdp_brut.upper() == "NAN":
+                    mdp_brut = matricule  # défaut = matricule
+
+                prenom = str(row.get("Prenom", "")).strip()
+                nom    = str(row.get("Nom",    "")).strip()
 
                 user = User(
-                    nom           = str(row.get("Nom", "")).strip().upper(),
-                    prenom        = str(row.get("Prenom", "")).strip(),
+                    nom           = nom.upper(),
+                    prenom        = prenom,
                     email         = email,
-                    password_hash = hash_password(matricule),
+                    password_hash = hash_password(mdp_brut),
                     role          = RoleEnum.eleve,
                     is_active     = True
                 )
                 db.add(user)
                 db.flush()
 
+                classe_id = cls_map[cls_key]
                 db.add(Etudiant(
                     user_id         = user.id,
                     matricule       = matricule,
                     date_naissance  = date_naissance,
-                    classe_id       = cls_map[cls_key],  # nom_lower → id
+                    classe_id       = classe_id,
                     filiere_origine = str(row.get("Filiere_Origine", "")).strip(),
                     annee_scolaire  = annee
                 ))
                 mats_existants.add(matricule)
                 emails_existants.add(email)
                 nb += 1
+
+                # ── MODIFIÉ : email de bienvenue après création ──────────
+                # Envoyé en dehors du bloc try/except principal pour ne pas
+                # bloquer la migration si l'envoi échoue
+                nom_classe_affiche = cls_nom_map.get(classe_id, nom_classe)
+                _envoyer_bienvenue_etudiant(
+                    email         = email,
+                    prenom        = prenom,
+                    nom           = nom,
+                    mot_de_passe  = mdp_brut,
+                    classe        = nom_classe_affiche,
+                    warn          = warn,
+                )
 
             except Exception as e:
                 err.append(f"Etudiant ligne {idx + 2} : {str(e)}")
@@ -254,95 +264,37 @@ def migrate_etudiants(df: pd.DataFrame) -> tuple:
     return nb, err, warn
 
 
-# ============================================================
-#  MIGRATION COMPLETE DEPUIS UN FICHIER EXCEL
-# ============================================================
-
-def migrate_delegues(df, db):
+def _envoyer_bienvenue_etudiant(
+    email: str, prenom: str, nom: str,
+    mot_de_passe: str, classe: str, warn: list
+) -> None:
     """
-    Importe les delegues (titulaire + suppleant) depuis la feuille Delegues.
-    Colonnes : Nom_Classe | Matricule_Titulaire | Matricule_Suppleant
+    Tente d'envoyer l'email de bienvenue à un étudiant nouvellement créé.
+    En cas d'échec, ajoute un avertissement (non bloquant).
     """
-    nb   = 0
-    err  = []
-    warn = []
-
-    cols_req = ["Nom_Classe", "Matricule_Titulaire", "Matricule_Suppleant"]
-    missing  = [c for c in cols_req if c not in df.columns]
-    if missing:
-        err.append(f"Colonnes manquantes : {', '.join(missing)}")
-        return 0, err, warn
-
-    for _, row in df.iterrows():
-        nom_classe   = str(row.get("Nom_Classe", "")).strip()
-        mat_tit      = str(row.get("Matricule_Titulaire", "")).strip()
-        mat_sup      = str(row.get("Matricule_Suppleant", "")).strip()
-
-        if not nom_classe:
-            continue
-
-        classe = db.query(Classe).filter(Classe.nom == nom_classe).first()
-        if not classe:
-            err.append(f"Classe '{nom_classe}' introuvable.")
-            continue
-
-        # Traiter titulaire
-        for mat, est_tit in [(mat_tit, True), (mat_sup, False)]:
-            if not mat or mat == "nan":
-                continue
-            etu = db.query(Etudiant).filter(Etudiant.matricule == mat).first()
-            if not etu:
-                err.append(f"Matricule '{mat}' introuvable.")
-                continue
-
-            # Verifier si deja delegue pour cette classe avec ce type
-            existing = db.query(ResponsableClasse).filter(
-                ResponsableClasse.classe_id == classe.id,
-                ResponsableClasse.est_titulaire == est_tit
-            ).first()
-            if existing:
-                # Mise a jour
-                old_user = db.query(User).filter(User.id == existing.user_id).first()
-                if old_user and old_user.id != etu.user_id:
-                    existing.user_id = etu.user_id
-                    etu.user.role = RoleEnum.resp_classe
-                    warn.append(f"Delegue {'titulaire' if est_tit else 'suppleant'} "
-                               f"de '{nom_classe}' mis a jour -> {mat}.")
-                    nb += 1
-                continue
-
-            # Supprimer ancienne affectation de cet etudiant comme resp de cette classe
-            old = db.query(ResponsableClasse).filter(
-                ResponsableClasse.user_id == etu.user_id,
-                ResponsableClasse.classe_id == classe.id
-            ).first()
-            if old:
-                db.delete(old)
-
-            # Changer le role
-            etu.user.role = RoleEnum.resp_classe
-
-            rc = ResponsableClasse(
-                user_id      = etu.user_id,
-                classe_id    = classe.id,
-                est_titulaire= est_tit
-            )
-            db.add(rc)
-            nb += 1
-
     try:
-        db.commit()
+        from utils.mailer import email_bienvenue_etudiant
+        ok, err_msg = email_bienvenue_etudiant(
+            to           = email,
+            prenom       = prenom,
+            nom          = nom,
+            email_connexion = email,
+            mot_de_passe = mot_de_passe,
+            classe       = classe,
+        )
+        if not ok:
+            warn.append(f"Email bienvenue non envoyé à '{email}' : {err_msg}")
     except Exception as e:
-        db.rollback()
-        err.append(f"Erreur commit delegues : {str(e)}")
+        warn.append(f"Email bienvenue non envoyé à '{email}' : {str(e)}")
 
-    return nb, err, warn
 
+# ============================================================
+#  MIGRATION RESPONSABLES (filiere + classe)
+# ============================================================
 
 def migrate_responsables(df: pd.DataFrame, role_cible: str) -> tuple:
     """
-    Importe les responsables de filières (Resp_Filieres) ou de classes (Resp_Classes).
-
+    Colonnes :
     Resp_Filieres  : Nom | Prenom | Email | Mot_de_passe | Code_Filiere
     Resp_Classes   : Nom | Prenom | Email | Mot_de_passe | Nom_Classe | Type (titulaire/suppleant)
 
@@ -359,28 +311,24 @@ def migrate_responsables(df: pd.DataFrame, role_cible: str) -> tuple:
     warn = []
 
     try:
-        # Maps de référence chargés en mémoire
-        fil_map = {f.code.upper(): f.id for f in db.query(Filiere).all()}
-        cls_map = {c.nom.strip().lower(): c.id for c in db.query(Classe).all()}
+        fil_map   = {f.code.upper(): f.id for f in db.query(Filiere).all()}
+        cls_map   = {c.nom.strip().lower(): c.id for c in db.query(Classe).all()}
         role_enum = RoleEnum.resp_filiere if role_cible == "resp_filiere" else RoleEnum.resp_classe
 
         for idx, row in df.iterrows():
             try:
-                nom      = str(row.get("Nom",           "")).strip()
-                prenom   = str(row.get("Prenom",        "")).strip()
-                email    = str(row.get("Email",         "")).strip().lower()
-                mdp      = str(row.get("Mot_de_passe",  "")).strip()
+                nom    = str(row.get("Nom",          "")).strip()
+                prenom = str(row.get("Prenom",       "")).strip()
+                email  = str(row.get("Email",        "")).strip().lower()
+                mdp    = str(row.get("Mot_de_passe", "")).strip()
 
-                # Ignorer lignes vides ou exemples
                 if not email or email == "nan" or email.startswith("#"):
                     continue
                 if not nom or nom.startswith("#"):
                     continue
 
-                # ── Récupérer ou créer l'utilisateur ────────────
                 user = db.query(User).filter(User.email == email).first()
                 if user:
-                    # Promotion
                     user.role      = role_enum
                     user.is_active = True
                     if nom:    user.nom    = nom.upper()
@@ -403,7 +351,7 @@ def migrate_responsables(df: pd.DataFrame, role_cible: str) -> tuple:
                     db.add(user)
                     db.flush()
 
-                # ── Affecter à la filière ou à la classe ────────
+                # ── Affecter à la filière ou à la classe ────────────────
                 if role_cible == "resp_filiere":
                     code_fil = str(row.get("Code_Filiere", "")).strip().upper()
                     if code_fil.startswith("#") or not code_fil or code_fil == "NAN":
@@ -411,7 +359,6 @@ def migrate_responsables(df: pd.DataFrame, role_cible: str) -> tuple:
                     if code_fil not in fil_map:
                         err.append(f"Filière '{code_fil}' introuvable pour '{email}'.")
                         continue
-                    # Supprimer ancienne affectation
                     old = db.query(ResponsableFiliere).filter(
                         ResponsableFiliere.user_id == user.id
                     ).first()
@@ -421,19 +368,17 @@ def migrate_responsables(df: pd.DataFrame, role_cible: str) -> tuple:
 
                 else:  # resp_classe
                     nom_cls  = str(row.get("Nom_Classe", "")).strip()
-                    type_del = str(row.get("Type",       "titulaire")).strip().lower()
+                    type_del = str(row.get("Type", "titulaire")).strip().lower()
                     if nom_cls.startswith("#") or not nom_cls or nom_cls == "NAN":
                         continue
-                    cls_key  = nom_cls.lower()
+                    cls_key = nom_cls.lower()
                     if cls_key not in cls_map:
                         err.append(f"Classe '{nom_cls}' introuvable pour '{email}'.")
                         continue
                     est_tit = (type_del == "titulaire")
                     cls_id  = cls_map[cls_key]
-
-                    # Supprimer ancienne affectation même type pour cette classe
                     old = db.query(ResponsableClasse).filter(
-                        ResponsableClasse.classe_id    == cls_id,
+                        ResponsableClasse.classe_id     == cls_id,
                         ResponsableClasse.est_titulaire == est_tit
                     ).first()
                     if old:
@@ -460,6 +405,73 @@ def migrate_responsables(df: pd.DataFrame, role_cible: str) -> tuple:
     return nb, err, warn
 
 
+# ============================================================
+#  MIGRATION DELEGUES (par matricule)
+# ============================================================
+
+def migrate_delegues(df, db) -> tuple:
+    """
+    Importe les délégués (titulaire + suppléant) depuis la feuille Delegues.
+    Colonnes : Nom_Classe | Matricule_Titulaire | Matricule_Suppleant
+    """
+    from models import ResponsableClasse
+
+    nb   = 0
+    err  = []
+    warn = []
+
+    cols_req = ["Nom_Classe", "Matricule_Titulaire", "Matricule_Suppleant"]
+    missing  = [c for c in cols_req if c not in df.columns]
+    if missing:
+        err.append(f"Colonnes manquantes : {', '.join(missing)}")
+        return 0, err, warn
+
+    for _, row in df.iterrows():
+        nom_classe = str(row.get("Nom_Classe",            "")).strip()
+        mat_tit    = str(row.get("Matricule_Titulaire",   "")).strip()
+        mat_sup    = str(row.get("Matricule_Suppleant",   "")).strip()
+
+        if not nom_classe:
+            continue
+
+        classe = db.query(Classe).filter(Classe.nom == nom_classe).first()
+        if not classe:
+            err.append(f"Classe '{nom_classe}' introuvable.")
+            continue
+
+        for mat, est_tit in [(mat_tit, True), (mat_sup, False)]:
+            if not mat or mat == "nan":
+                continue
+            etu = db.query(Etudiant).filter(Etudiant.matricule == mat).first()
+            if not etu:
+                err.append(f"Matricule '{mat}' introuvable.")
+                continue
+            old = db.query(ResponsableClasse).filter(
+                ResponsableClasse.classe_id     == classe.id,
+                ResponsableClasse.est_titulaire == est_tit
+            ).first()
+            if old:
+                db.delete(old)
+            db.add(ResponsableClasse(
+                user_id       = etu.user_id,
+                classe_id     = classe.id,
+                est_titulaire = est_tit
+            ))
+        nb += 1
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        err.append(f"Erreur commit delegues : {str(e)}")
+
+    return nb, err, warn
+
+
+# ============================================================
+#  MIGRATION COMPLETE DEPUIS UN FICHIER EXCEL
+# ============================================================
+
 def migrate_from_excel(contents: str, filename: str) -> dict:
     """
     Import complet depuis un fichier Excel multi-feuilles.
@@ -467,7 +479,8 @@ def migrate_from_excel(contents: str, filename: str) -> dict:
     Ordre recommandé :
     1. Filieres       : Code, Libelle, Duree_ans
     2. Classes        : Nom, Code_Filiere, Niveau, Is_Commune, Annee_Scolaire
-    3. Etudiants      : Matricule, Nom, Prenom, Email, Date_Naissance, Nom_Classe, Annee_Scolaire, Filiere_Origine
+    3. Etudiants      : Matricule, Nom, Prenom, Email, Date_Naissance,
+                        Nom_Classe, Annee_Scolaire, Filiere_Origine, Mot_de_passe (optionnel)
     4. Resp_Filieres  : Nom, Prenom, Email, Mot_de_passe, Code_Filiere
     5. Resp_Classes   : Nom, Prenom, Email, Mot_de_passe, Nom_Classe, Type
     6. Delegues       : Nom_Classe, Matricule_Titulaire, Matricule_Suppleant
@@ -544,27 +557,31 @@ def migrate_from_excel(contents: str, filename: str) -> dict:
 
 def generate_migration_template() -> bytes:
     """
-    Genere un template Excel vide avec en-têtes et lignes d'exemple grisées.
+    Génère un template Excel vide avec en-têtes et lignes d'exemple grisées.
     L'utilisateur doit REMPLACER les lignes d'exemple par ses données.
     Les lignes commençant par '#' sont ignorées lors de l'import.
+
+    MODIFIÉ :
+      - Feuille Etudiants : ajout colonne Mot_de_passe (optionnelle)
+      - Feuille Instructions : correction ISE 3 ans (était 5 ans)
+                               + doc colonne Mot_de_passe + email bienvenue
     """
-    from openpyxl.styles import PatternFill, Font, Alignment, PatternFill
-    from openpyxl.styles import Border, Side
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     import openpyxl
 
     wb  = openpyxl.Workbook()
     wb.remove(wb.active)
 
-    # Styles
+    # ── Styles communs ─────────────────────────────────────────
     def hdr_fill(hex_color):
         return PatternFill("solid", fgColor=hex_color)
     hdr_font    = Font(color="FFFFFF", bold=True, name="Calibri", size=11)
     exemple_font= Font(color="AAAAAA", italic=True, name="Calibri", size=10)
     exemple_fill= PatternFill("solid", fgColor="F5F5F5")
     border      = Border(
-        left=Side(style="thin", color="DDDDDD"),
-        right=Side(style="thin", color="DDDDDD"),
-        top=Side(style="thin", color="DDDDDD"),
+        left  =Side(style="thin", color="DDDDDD"),
+        right =Side(style="thin", color="DDDDDD"),
+        top   =Side(style="thin", color="DDDDDD"),
         bottom=Side(style="thin", color="DDDDDD")
     )
     centre = Alignment(horizontal="center", vertical="center")
@@ -577,10 +594,10 @@ def generate_migration_template() -> bytes:
     for col, h in enumerate(headers_fil, 1):
         c = ws1.cell(row=1, column=col, value=h)
         c.fill, c.font, c.alignment, c.border = hdr_fill("003580"), hdr_font, centre, border
-    # Ligne exemple grisée (sera ignorée à l'import car commence par #)
+    # MODIFIÉ : ISE = 3 ans (corrigé de 5 ans)
     exemples_fil = [
-        ["# ISEP",    "# Ingenieur Statisticien Economiste Preparatoire", "# 3"],
-        ["# ISE",     "# Ingenieur Statisticien Economiste",              "# 5"],
+        ["# ISEP",    "# Ingenieur Statisticien Economiste Preparatoire", "# 2"],
+        ["# ISE",     "# Ingenieur Statisticien Economiste",              "# 3"],
         ["# AS",      "# Analyste Statisticien",                         "# 3"],
         ["# MASTERS", "# Masters Specialises",                           "# 1"],
     ]
@@ -614,28 +631,37 @@ def generate_migration_template() -> bytes:
         ws2.column_dimensions[col_letter].width = width
     ws2.row_dimensions[1].height = 20
 
-    # ── Feuille Etudiants ─────────────────────────────────────
+    # ── Feuille Etudiants — MODIFIÉ : ajout Mot_de_passe ──────
     ws3 = wb.create_sheet("Etudiants")
     ws3.sheet_properties.tabColor = "F5A623"
     headers_etu = [
         "Matricule", "Nom", "Prenom", "Email",
-        "Date_Naissance", "Nom_Classe", "Annee_Scolaire", "Filiere_Origine"
+        "Date_Naissance", "Nom_Classe", "Annee_Scolaire",
+        "Filiere_Origine", "Mot_de_passe"        # ← NOUVEAU
     ]
     for col, h in enumerate(headers_etu, 1):
         c = ws3.cell(row=1, column=col, value=h)
         c.fill, c.font, c.alignment, c.border = hdr_fill("F5A623"), hdr_font, centre, border
+
+    # Note explicative sur Mot_de_passe dans la cellule I1 (col 9)
+    note_mdp = ws3.cell(row=1, column=10,
+        value="⚠ Mot_de_passe optionnel. Si vide → défaut = Matricule. "
+              "Un email de bienvenue avec les identifiants est envoyé automatiquement.")
+    note_mdp.font = Font(color="EF4444", italic=True, size=9, name="Calibri")
+    ws3.column_dimensions["J"].width = 70
+
     exemples_etu = [
         ["# ENSAE-2024-001", "# DIALLO", "# Amadou", "# adiallo@ensae.sn",
-         "# 15/09/2002", "# ISEP 1", "# 2024-2025", "# ISEP"],
+         "# 15/09/2002", "# ISEP 1", "# 2024-2025", "# ISEP", "# "],
         ["# ENSAE-2024-002", "# NDIAYE", "# Fatou",  "# fndiaye@ensae.sn",
-         "# 20/03/2001", "# AS1",    "# 2024-2025", "# AS"],
+         "# 20/03/2001", "# AS1",    "# 2024-2025", "# AS",   "# monMdpPerso"],
     ]
     for r, row in enumerate(exemples_etu, 2):
         for col, val in enumerate(row, 1):
             c = ws3.cell(row=r, column=col, value=val)
             c.font, c.fill, c.alignment, c.border = exemple_font, exemple_fill, gauche, border
-    for col_letter, width in zip(["A","B","C","D","E","F","G","H"],
-                                  [18, 15, 15, 25, 16, 16, 14, 15]):
+    for col_letter, width in zip(["A","B","C","D","E","F","G","H","I"],
+                                  [18, 15, 15, 25, 16, 16, 14, 15, 18]):
         ws3.column_dimensions[col_letter].width = width
     ws3.row_dimensions[1].height = 20
 
@@ -647,8 +673,8 @@ def generate_migration_template() -> bytes:
         c = ws4.cell(row=1, column=col, value=h)
         c.fill, c.font, c.alignment, c.border = hdr_fill("8B5CF6"), hdr_font, centre, border
     exemples_del = [
-        ["# AS1",        "# ENSAE-2024-001", "# ENSAE-2024-002"],
-        ["# ISEP 1",     "# ENSAE-2024-003", "# ENSAE-2024-004"],
+        ["# AS1",    "# ENSAE-2024-001", "# ENSAE-2024-002"],
+        ["# ISEP 1", "# ENSAE-2024-003", "# ENSAE-2024-004"],
     ]
     for r, row in enumerate(exemples_del, 2):
         for col, val in enumerate(row, 1):
@@ -665,15 +691,14 @@ def generate_migration_template() -> bytes:
     for col, h in enumerate(headers_rf, 1):
         c = ws5.cell(row=1, column=col, value=h)
         c.fill, c.font, c.alignment, c.border = hdr_fill("0EA5E9"), hdr_font, centre, border
-    # Note mot de passe
     note_rf = ws5.cell(row=1, column=6,
-                       value="⚠ Mot_de_passe : min 6 caractères. Laissez vide si compte déjà existant.")
+        value="⚠ Mot_de_passe : min 6 caractères. Laissez vide si compte déjà existant.")
     note_rf.font = Font(color="EF4444", italic=True, size=9, name="Calibri")
     ws5.column_dimensions["F"].width = 55
 
     exemples_rf = [
-        ["# Diallo",  "# Ibrahima",  "# idiallo@ensae.sn",  "# pass123",  "# ISE"],
-        ["# Ndiaye",  "# Aminata",   "# andiaye@ensae.sn",  "# pass456",  "# AS"],
+        ["# Diallo", "# Ibrahima", "# idiallo@ensae.sn", "# pass123", "# ISE"],
+        ["# Ndiaye", "# Aminata",  "# andiaye@ensae.sn", "# pass456", "# AS"],
     ]
     for r, row in enumerate(exemples_rf, 2):
         for col, val in enumerate(row, 1):
@@ -691,14 +716,14 @@ def generate_migration_template() -> bytes:
         c = ws6.cell(row=1, column=col, value=h)
         c.fill, c.font, c.alignment, c.border = hdr_fill("F59E0B"), hdr_font, centre, border
     note_rc = ws6.cell(row=1, column=7,
-                       value="⚠ Type : 'titulaire' ou 'suppleant'. Email existant = promotion automatique.")
+        value="⚠ Type : 'titulaire' ou 'suppleant'. Email existant = promotion automatique.")
     note_rc.font = Font(color="EF4444", italic=True, size=9, name="Calibri")
     ws6.column_dimensions["G"].width = 55
 
     exemples_rc = [
-        ["# Sall",   "# Marietou", "# sallmarietou@ensae.sn", "# pass123", "# AS3",    "# titulaire"],
-        ["# Diop",   "# Magatte",  "# diopmagatte@ensae.sn",  "# pass456", "# AS3",    "# suppleant"],
-        ["# Faye",   "# Ameth",    "# fayeameth@ensae.sn",    "# pass789", "# ISEP 1", "# titulaire"],
+        ["# Sall",  "# Marietou", "# sallmarietou@ensae.sn", "# pass123", "# AS3",    "# titulaire"],
+        ["# Diop",  "# Magatte",  "# diopmagatte@ensae.sn",  "# pass456", "# AS3",    "# suppleant"],
+        ["# Faye",  "# Ameth",    "# fayeameth@ensae.sn",    "# pass789", "# ISEP 1", "# titulaire"],
     ]
     for r, row in enumerate(exemples_rc, 2):
         for col, val in enumerate(row, 1):
@@ -708,7 +733,7 @@ def generate_migration_template() -> bytes:
         ws6.column_dimensions[col_letter].width = width
     ws6.row_dimensions[1].height = 20
 
-    # ── Feuille Instructions ──────────────────────────────────
+    # ── Feuille Instructions — MODIFIÉ : ISE 3 ans + Mot_de_passe + email ──
     ws7 = wb.create_sheet("⚠ Instructions")
     ws7.sheet_properties.tabColor = "EF4444"
     ws7["A1"] = "INSTRUCTIONS — TEMPLATE DE MIGRATION SGA ENSAE"
@@ -719,27 +744,38 @@ def generate_migration_template() -> bytes:
         ("A4",  "→ Les lignes grisées commençant par '#' sont des EXEMPLES — supprimez-les avant d'importer."),
         ("A5",  "→ Ne modifiez JAMAIS les noms des colonnes (ligne 1)."),
         ("A6",  "→ L'ordre d'import est important : Filieres → Classes → Etudiants → Resp → Delegues."),
+
         ("A8",  "FEUILLE : Filieres"),
         ("A9",  "→ Ne remplir que si vos filières ne sont pas encore en base."),
-        ("A10", "→ Code : identifiant court unique (ex: ISE, AS, ISEP)."),
-        ("A12", "FEUILLE : Classes"),
-        ("A13", "→ Ne remplir que si vos classes ne sont pas encore en base."),
-        ("A14", "→ Is_Commune : 0 = classe normale, 1 = classe commune/partagée entre filières."),
-        ("A16", "FEUILLE : Etudiants"),
-        ("A17", "→ Une ligne par étudiant."),
-        ("A18", "→ Mot de passe par défaut = Matricule (l'étudiant peut le changer après connexion)."),
-        ("A19", "→ Date_Naissance : format JJ/MM/AAAA (ex: 15/09/2002) ou AAAA-MM-JJ."),
-        ("A21", "FEUILLE : Resp_Filieres"),
-        ("A22", "→ Crée un compte responsable de filière avec les identifiants fournis."),
-        ("A23", "→ Si l'email existe déjà en base → promotion automatique au rôle resp_filiere."),
-        ("A24", "→ Mot_de_passe : obligatoire pour un nouveau compte, optionnel si email existant."),
-        ("A26", "FEUILLE : Resp_Classes (Délégués)"),
-        ("A27", "→ Type : 'titulaire' ou 'suppleant' (un de chaque par classe)."),
-        ("A28", "→ Si l'email est celui d'un étudiant existant → promotion automatique."),
-        ("A30", "FEUILLE : Delegues"),
-        ("A31", "→ Alternative à Resp_Classes : désigner par matricule étudiant existant."),
-        ("A32", "→ Matricule_Titulaire et Matricule_Suppleant doivent déjà être importés."),
+        ("A10", "→ Code : identifiant court unique (ex: ISE, AS, ISEP, MASTERS)."),
+        # MODIFIÉ : correction des durées — ISE = 3 ans, ISEP = 2 ans
+        ("A11", "→ Durées officielles ENSAE : ISEP = 2 ans | ISE = 3 ans | AS = 3 ans | MASTERS = 1 an."),
+
+        ("A13", "FEUILLE : Classes"),
+        ("A14", "→ Ne remplir que si vos classes ne sont pas encore en base."),
+        ("A15", "→ Is_Commune : 0 = classe normale, 1 = classe commune/partagée entre filières."),
+
+        ("A17", "FEUILLE : Etudiants"),
+        ("A18", "→ Une ligne par étudiant."),
+        # MODIFIÉ : doc Mot_de_passe + email bienvenue
+        ("A19", "→ Mot_de_passe : OPTIONNEL. Si vide → mot de passe par défaut = Matricule."),
+        ("A20", "→ Un email de bienvenue avec les identifiants de connexion est envoyé automatiquement à chaque étudiant importé."),
+        ("A21", "→ Date_Naissance : format JJ/MM/AAAA (ex: 15/09/2002) ou AAAA-MM-JJ."),
+
+        ("A23", "FEUILLE : Resp_Filieres"),
+        ("A24", "→ Crée un compte responsable de filière avec les identifiants fournis."),
+        ("A25", "→ Si l'email existe déjà en base → promotion automatique au rôle resp_filiere."),
+        ("A26", "→ Mot_de_passe : obligatoire pour un nouveau compte, optionnel si email existant."),
+
+        ("A28", "FEUILLE : Resp_Classes (Délégués)"),
+        ("A29", "→ Type : 'titulaire' ou 'suppleant' (un de chaque par classe)."),
+        ("A30", "→ Si l'email est celui d'un étudiant existant → promotion automatique."),
+
+        ("A32", "FEUILLE : Delegues"),
+        ("A33", "→ Alternative à Resp_Classes : désigner par matricule étudiant existant."),
+        ("A34", "→ Matricule_Titulaire et Matricule_Suppleant doivent déjà être importés."),
     ]
+
     for cell_ref, text in instructions:
         ws7[cell_ref] = text
         is_header = not text.startswith("→")
@@ -749,7 +785,7 @@ def generate_migration_template() -> bytes:
             name="Calibri",
             color="111827" if not is_header else "003580"
         )
-    ws7.column_dimensions["A"].width = 85
+    ws7.column_dimensions["A"].width = 95
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -767,7 +803,6 @@ if __name__ == "__main__":
     python utils/migration.py --template
     python utils/migration.py --import fichier.xlsx
     """
-    import sys
 
     if len(sys.argv) < 2:
         print("Usage : python migration.py --template | --import <fichier.xlsx>")
@@ -784,8 +819,8 @@ if __name__ == "__main__":
         print(f"[...] Import depuis {filepath}")
         with open(filepath, "rb") as f:
             raw = f.read()
-        b64 = "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + \
-              base64.b64encode(raw).decode()
+        b64 = ("data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,"
+               + base64.b64encode(raw).decode())
         resultats = migrate_from_excel(b64, filepath)
         for feuille, res in resultats.items():
             print(f"  {feuille} : {res['nb']} importe(s)")

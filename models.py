@@ -48,7 +48,7 @@ class StatutMigrationEnum(str, enum.Enum):
 class Filiere(Base):
     """
     Filières de l'ENSAE :
-    ISEP, ISE, AS, Masters
+    ISEP (2 ans), ISE (3 ans), AS (3 ans), Masters (1 an)
     """
     __tablename__ = "filieres"
 
@@ -78,12 +78,12 @@ class Classe(Base):
     is_commune     = Column(Boolean, default=False)
     annee_scolaire = Column(String(9), nullable=False)            # ex: 2024-2025
 
-    filiere      = relationship("Filiere", back_populates="classes")
-    etudiants    = relationship("Etudiant", back_populates="classe")
-    modules      = relationship("Module", back_populates="classe")
-    responsables = relationship("ResponsableClasse", back_populates="classe")
-    ue_classes   = relationship("UEClasse", back_populates="classe")
-    periodes     = relationship("Periode", back_populates="classe")
+    filiere          = relationship("Filiere", back_populates="classes")
+    etudiants        = relationship("Etudiant", back_populates="classe")
+    modules          = relationship("Module", back_populates="classe")
+    responsables     = relationship("ResponsableClasse", back_populates="classe")
+    ue_classes       = relationship("UEClasse", back_populates="classe")
+    periodes         = relationship("Periode", back_populates="classe")
     planning_classes = relationship("PlanningClasse", back_populates="classe")
 
     def __repr__(self):
@@ -109,11 +109,11 @@ class User(Base):
     role          = Column(SAEnum(RoleEnum), nullable=False)
     is_active     = Column(Boolean, default=True)
 
-    etudiant         = relationship("Etudiant", back_populates="user", uselist=False)
-    resp_filieres    = relationship("ResponsableFiliere", back_populates="user")
-    resp_classes     = relationship("ResponsableClasse", back_populates="user")
-    seances_creees   = relationship("Seance", back_populates="created_by_user")
-    plannings_crees  = relationship("Planning", back_populates="created_by_user")
+    etudiant          = relationship("Etudiant", back_populates="user", uselist=False)
+    resp_filieres     = relationship("ResponsableFiliere", back_populates="user")
+    resp_classes      = relationship("ResponsableClasse", back_populates="user")
+    seances_creees    = relationship("Seance", back_populates="created_by_user")
+    plannings_crees   = relationship("Planning", back_populates="created_by_user")
     bulletins_valides = relationship("Bulletin", back_populates="valide_par_user")
 
     def __repr__(self):
@@ -168,10 +168,10 @@ class ResponsableClasse(Base):
     """
     __tablename__ = "resp_classes"
 
-    id             = Column(Integer, primary_key=True, autoincrement=True)
-    user_id        = Column(Integer, ForeignKey("users.id"), nullable=False)
-    classe_id      = Column(Integer, ForeignKey("classes.id"), nullable=False)
-    est_titulaire  = Column(Boolean, default=True, nullable=False)
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    user_id       = Column(Integer, ForeignKey("users.id"), nullable=False)
+    classe_id     = Column(Integer, ForeignKey("classes.id"), nullable=False)
+    est_titulaire = Column(Boolean, default=True, nullable=False)
     # True  = Delegue titulaire
     # False = Delegue suppleant
 
@@ -255,22 +255,27 @@ class Module(Base):
     """
     Modules pédagogiques rattachés à une UE.
     Chaque module peut avoir 1 ou 2 notes par étudiant.
+
+    email_enseignant : email direct du prof → utilisé pour les notifications
+                       planning à la validation (plus fiable qu'une recherche par nom).
     """
     __tablename__ = "modules"
 
-    id             = Column(Integer, primary_key=True, autoincrement=True)
-    code           = Column(String(20), nullable=False)           # ex: MOD-STAT1
-    libelle        = Column(String(100), nullable=False)
-    coefficient    = Column(Float, nullable=False, default=1.0)
-    enseignant     = Column(String(100))
-    volume_horaire = Column(Integer)                              # heures prévues
-    ue_id          = Column(Integer, ForeignKey("ue.id"), nullable=False)
-    classe_id      = Column(Integer, ForeignKey("classes.id"), nullable=False)
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    code             = Column(String(20), nullable=False)         # ex: MOD-STAT1
+    libelle          = Column(String(100), nullable=False)
+    coefficient      = Column(Float, nullable=False, default=1.0)
+    enseignant       = Column(String(100))                        # nom affiché dans l'UI
+    email_enseignant = Column(String(150))                        # ← NOUVEAU : email pour notifs planning
+    volume_horaire   = Column(Integer)                            # heures prévues
 
-    ue       = relationship("UE", back_populates="modules")
-    classe   = relationship("Classe", back_populates="modules")
-    seances  = relationship("Seance", back_populates="module")
-    notes    = relationship("Note", back_populates="module")
+    ue_id     = Column(Integer, ForeignKey("ue.id"), nullable=False)
+    classe_id = Column(Integer, ForeignKey("classes.id"), nullable=False)
+
+    ue               = relationship("UE", back_populates="modules")
+    classe           = relationship("Classe", back_populates="modules")
+    seances          = relationship("Seance", back_populates="module")
+    notes            = relationship("Note", back_populates="module")
     planning_seances = relationship("PlanningSeance", back_populates="module")
 
     def __repr__(self):
@@ -291,9 +296,9 @@ class Seance(Base):
     theme       = Column(Text)
     created_by  = Column(Integer, ForeignKey("users.id"), nullable=False)
 
-    module           = relationship("Module", back_populates="seances")
-    created_by_user  = relationship("User", back_populates="seances_creees")
-    presences        = relationship("Presence", back_populates="seance")
+    module          = relationship("Module", back_populates="seances")
+    created_by_user = relationship("User", back_populates="seances_creees")
+    presences       = relationship("Presence", back_populates="seance")
 
     def __repr__(self):
         return f"<Seance module={self.module_id} date={self.date}>"
@@ -372,8 +377,8 @@ class Bulletin(Base):
 
     __table_args__ = (UniqueConstraint("etudiant_id", "periode_id"),)
 
-    etudiant       = relationship("Etudiant", back_populates="bulletins")
-    periode        = relationship("Periode", back_populates="bulletins")
+    etudiant        = relationship("Etudiant", back_populates="bulletins")
+    periode         = relationship("Periode", back_populates="bulletins")
     valide_par_user = relationship("User", back_populates="bulletins_valides")
 
     def __repr__(self):

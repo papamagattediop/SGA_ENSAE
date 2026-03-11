@@ -199,7 +199,7 @@ def _tableau_seances_html(seances: list, couleur: str, colonnes: list) -> str:
             tds = ""
             for c in cols_affichees:
                 if c == "horaire":
-                    val = f"{s.get('heure_debut', '-')} – {s.get('heure_fin', '-')}"
+                    val   = f"{s.get('heure_debut', '-')} – {s.get('heure_fin', '-')}"
                     style = "color:#6b7280;white-space:nowrap;"
                 elif c in ("jour", "date"):
                     val   = s.get(c, '-')
@@ -385,7 +385,7 @@ def email_planning_modifie(
         </div>
         <div style="text-align:center;margin-top:24px;">
             <a href="http://127.0.0.1:8050/planning"
-               style="background:{OR};color:{BLEU};padding:12px 28px;
+               style="background:#d97706;color:#ffffff;padding:12px 28px;
                       border-radius:8px;text-decoration:none;font-weight:700;
                       font-size:0.875rem;display:inline-block;">
                 Voir les modifications
@@ -441,12 +441,7 @@ def email_planning_prof(
         </div>
     """
     html = base_template(f"Vos cours — semaine du {semaine}", contenu, VERT)
-    return send_email(
-        to,
-        f"Vos cours semaine {semaine} — {classe}",
-        html
-    )
-
+    return send_email(to, f"Vos cours semaine {semaine} — {classe}", html)
 
 
 def email_planning_confirmation_rc(
@@ -458,8 +453,7 @@ def email_planning_confirmation_rc(
 ) -> tuple[bool, str]:
     """
     Email de confirmation envoyé au responsable de classe
-    après qu'il a soumis son planning. Lui confirme la bonne
-    réception et lui montre le récapitulatif des séances soumises.
+    après qu'il a soumis son planning.
     """
     seances = seances or []
 
@@ -499,6 +493,151 @@ def email_planning_confirmation_rc(
     html = base_template(f"Planning soumis — {classe}", contenu, BLEU)
     return send_email(to, f"Planning semaine {semaine} — {classe} soumis ✅", html)
 
+
+# ============================================================
+#  EMAIL BIENVENUE ETUDIANT  ← NOUVEAU
+# ============================================================
+
+def email_bienvenue_etudiant(
+    to: str,
+    prenom: str,
+    nom: str,
+    email_connexion: str,
+    mot_de_passe: str,
+    classe: str,
+) -> tuple[bool, str]:
+    """
+    Email de bienvenue envoyé à chaque étudiant lors de son import en base.
+
+    Contient :
+      - Ses identifiants de connexion (email + mot de passe)
+      - Le nom de sa classe
+      - Un bouton de connexion vers l'application
+      - Une recommandation de changer le mot de passe après la première connexion
+
+    Appelé par utils/migration.py → migrate_etudiants() après chaque création.
+    """
+    contenu = f"""
+        <p style="color:#374151;font-size:0.9rem;line-height:1.6;margin:0 0 20px;">
+            Bonjour <strong>{prenom} {nom.upper()}</strong>,
+        </p>
+
+        <p style="color:#374151;font-size:0.9rem;line-height:1.6;margin:0 0 20px;">
+            Bienvenue à l'<strong>ENSAE Dakar</strong> !
+            Votre compte sur la plateforme <strong>{APP_NAME}</strong> a été créé.
+            Vous pouvez dès maintenant vous connecter pour consulter votre planning,
+            vos notes et vos bulletins.
+        </p>
+
+        <!-- Encadré identifiants -->
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="background:#f0f9ff;border:1.5px solid #bae6fd;
+                      border-radius:10px;margin-bottom:24px;">
+            <tr>
+                <td style="padding:20px 24px;">
+                    <p style="color:{BLEU};font-weight:700;font-size:0.95rem;
+                               margin:0 0 14px;">
+                        🔑 Vos identifiants de connexion
+                    </p>
+
+                    <!-- Classe -->
+                    <table width="100%" cellpadding="0" cellspacing="0"
+                           style="margin-bottom:10px;">
+                        <tr>
+                            <td style="width:140px;color:#6b7280;font-size:0.82rem;
+                                       font-weight:600;padding:4px 0;">
+                                Classe :
+                            </td>
+                            <td style="color:#374151;font-size:0.875rem;
+                                       font-weight:500;padding:4px 0;">
+                                {classe}
+                            </td>
+                        </tr>
+                    </table>
+
+                    <!-- Email -->
+                    <table width="100%" cellpadding="0" cellspacing="0"
+                           style="margin-bottom:10px;">
+                        <tr>
+                            <td style="width:140px;color:#6b7280;font-size:0.82rem;
+                                       font-weight:600;padding:4px 0;">
+                                Identifiant (email) :
+                            </td>
+                            <td style="padding:4px 0;">
+                                <span style="background:#e0f2fe;color:{BLEU};
+                                             font-weight:700;font-size:0.875rem;
+                                             padding:3px 10px;border-radius:6px;
+                                             font-family:monospace;">
+                                    {email_connexion}
+                                </span>
+                            </td>
+                        </tr>
+                    </table>
+
+                    <!-- Mot de passe -->
+                    <table width="100%" cellpadding="0" cellspacing="0">
+                        <tr>
+                            <td style="width:140px;color:#6b7280;font-size:0.82rem;
+                                       font-weight:600;padding:4px 0;">
+                                Mot de passe :
+                            </td>
+                            <td style="padding:4px 0;">
+                                <span style="background:#fef9c3;color:#92400e;
+                                             font-weight:700;font-size:0.875rem;
+                                             padding:3px 10px;border-radius:6px;
+                                             font-family:monospace;">
+                                    {mot_de_passe}
+                                </span>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+
+        <!-- Avertissement sécurité -->
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="background:#fffbeb;border:1px solid #fde68a;
+                      border-radius:8px;margin-bottom:24px;">
+            <tr>
+                <td style="padding:14px 18px;">
+                    <p style="color:#92400e;font-size:0.82rem;margin:0;">
+                        ⚠️ <strong>Conseil de sécurité :</strong>
+                        Changez votre mot de passe dès votre première connexion
+                        via la page <em>Mon profil</em> de l'application.
+                        Ne communiquez jamais vos identifiants à un tiers.
+                    </p>
+                </td>
+            </tr>
+        </table>
+
+        <!-- Bouton connexion -->
+        <div style="text-align:center;margin-top:8px;">
+            <a href="http://127.0.0.1:8050/login"
+               style="background:{BLEU};color:#ffffff;padding:13px 32px;
+                      border-radius:8px;text-decoration:none;font-weight:700;
+                      font-size:0.9rem;display:inline-block;letter-spacing:0.3px;">
+                Se connecter à {APP_NAME}
+            </a>
+        </div>
+
+        <p style="color:#9ca3af;font-size:0.75rem;margin:24px 0 0;text-align:center;">
+            En cas de problème de connexion, contactez l'administration de l'ENSAE.
+        </p>
+    """
+
+    html = base_template(
+        f"Bienvenue sur {APP_NAME} — {classe}",
+        contenu,
+        BLEU
+    )
+    return send_email(
+        to,
+        f"Vos identifiants de connexion — {APP_NAME}",
+        html
+    )
+
+
 # ============================================================
 #  EMAIL BULLETIN
 # ============================================================
@@ -531,60 +670,42 @@ def email_bulletin(
             Vos résultats pour la période <strong>{periode}</strong>
             sont disponibles.
         </p>
-
-        <!-- Recap resultats -->
         <table width="100%" cellpadding="0" cellspacing="0"
                style="border:1px solid #e5e7eb;border-radius:8px;
-                      overflow:hidden;margin-bottom:24px;">
-            <tr style="background:{BLEU}08;">
-                <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;">
-                    <span style="color:#9ca3af;font-size:0.72rem;
-                                 text-transform:uppercase;font-weight:600;">
-                        Classe
-                    </span><br>
-                    <span style="color:#111827;font-weight:600;font-size:0.9rem;">
-                        {classe}
-                    </span>
-                </td>
-                <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;">
-                    <span style="color:#9ca3af;font-size:0.72rem;
-                                 text-transform:uppercase;font-weight:600;">
-                        Moyenne générale
-                    </span><br>
-                    <span style="color:{couleur_moy};font-weight:800;font-size:1.2rem;">
-                        {moyenne}/20
-                    </span>
-                </td>
-                <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;">
-                    <span style="color:#9ca3af;font-size:0.72rem;
-                                 text-transform:uppercase;font-weight:600;">
-                        Rang
-                    </span><br>
-                    <span style="color:{BLEU};font-weight:700;font-size:0.9rem;">
-                        {rang}
-                    </span>
-                </td>
-                <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;">
-                    <span style="color:#9ca3af;font-size:0.72rem;
-                                 text-transform:uppercase;font-weight:600;">
-                        Assiduité
-                    </span><br>
-                    <span style="color:{VERT if taux_assiduite >= 80 else '#ef4444'};
-                                 font-weight:700;font-size:0.9rem;">
-                        {taux_assiduite}%
-                    </span>
-                </td>
+                      overflow:hidden;margin-bottom:24px;border-collapse:collapse;">
+            <tr style="background:{BLEU}12;">
+                <th style="padding:10px;font-size:0.72rem;color:{BLEU};
+                            text-align:left;font-weight:700;text-transform:uppercase;
+                            border-bottom:1px solid #e5e7eb;">Indicateur</th>
+                <th style="padding:10px;font-size:0.72rem;color:{BLEU};
+                            text-align:left;font-weight:700;text-transform:uppercase;
+                            border-bottom:1px solid #e5e7eb;">Valeur</th>
+            </tr>
+            <tr style="border-bottom:1px solid #f3f4f6;">
+                <td style="padding:10px;font-size:0.82rem;color:#6b7280;">Classe</td>
+                <td style="padding:10px;font-size:0.82rem;color:#374151;font-weight:500;">{classe}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #f3f4f6;">
+                <td style="padding:10px;font-size:0.82rem;color:#6b7280;">Moyenne générale</td>
+                <td style="padding:10px;font-size:0.88rem;color:{couleur_moy};
+                            font-weight:700;">{moyenne:.2f} / 20</td>
+            </tr>
+            <tr style="border-bottom:1px solid #f3f4f6;">
+                <td style="padding:10px;font-size:0.82rem;color:#6b7280;">Rang</td>
+                <td style="padding:10px;font-size:0.82rem;color:#374151;font-weight:500;">{rang}</td>
             </tr>
             <tr>
-                <td colspan="4" style="padding:12px 16px;text-align:center;">
-                    <span style="background:{couleur_moy}15;color:{couleur_moy};
-                                 padding:4px 16px;border-radius:999px;
-                                 font-weight:700;font-size:0.82rem;">
-                        Mention : {mention}
-                    </span>
-                </td>
+                <td style="padding:10px;font-size:0.82rem;color:#6b7280;">Assiduité</td>
+                <td style="padding:10px;font-size:0.82rem;color:#374151;font-weight:500;">{taux_assiduite:.1f} %</td>
             </tr>
         </table>
+        <div style="text-align:center;margin-bottom:20px;">
+            <span style="background:{couleur_moy}15;color:{couleur_moy};
+                         padding:6px 18px;border-radius:999px;
+                         font-weight:700;font-size:0.82rem;">
+                Mention : {mention}
+            </span>
+        </div>
 
         <div style="text-align:center;margin-top:24px;">
             <a href="http://127.0.0.1:8050/bulletins"
@@ -596,11 +717,7 @@ def email_bulletin(
         </div>
     """
     html = base_template(f"Vos résultats — {periode}", contenu, BLEU)
-    return send_email(
-        to,
-        f"Résultats {periode} — {classe}",
-        html
-    )
+    return send_email(to, f"Résultats {periode} — {classe}", html)
 
 
 # ============================================================

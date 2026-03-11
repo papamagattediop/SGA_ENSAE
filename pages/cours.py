@@ -75,15 +75,16 @@ def get_modules(ue_id=None):
                 if s.heure_debut and s.heure_fin
             )
             result.append({
-                "id"           : m.id,
-                "code"         : m.code,
-                "libelle"      : m.libelle,
-                "enseignant"   : m.enseignant or "-",
-                "coefficient"  : m.coefficient,
-                "volume_horaire": m.volume_horaire or 0,
-                "heures_faites": heures_faites,
-                "progression"  : min(100, int(heures_faites / m.volume_horaire * 100)) if m.volume_horaire else 0,
-                "ue_code"      : m.ue.code if m.ue else "-",
+                "id"              : m.id,
+                "code"            : m.code,
+                "libelle"         : m.libelle,
+                "enseignant"      : m.enseignant or "-",
+                "email_enseignant": m.email_enseignant or "",
+                "coefficient"     : m.coefficient,
+                "volume_horaire"  : m.volume_horaire or 0,
+                "heures_faites"   : heures_faites,
+                "progression"     : min(100, int(heures_faites / m.volume_horaire * 100)) if m.volume_horaire else 0,
+                "ue_code"         : m.ue.code if m.ue else "-",
             })
         return result
     finally:
@@ -99,14 +100,15 @@ def generate_template_excel() -> bytes:
     Génère un template Excel avec trois feuilles :
     - Feuille 1 : UE      (Code_UE, Libelle_UE, Coefficient_UE, Code_Periode, Classe_ID)
     - Feuille 2 : Modules (Code_Module, Libelle_Module, Code_UE_Parent,
-                           Enseignant, Coefficient_Module, Volume_Horaire_h, Classe_ID)
-    - Feuille 3 : Référence_Classes  ← NOUVEAU
+                           Enseignant, Email_Enseignant, Coefficient_Module,
+                           Volume_Horaire_h, Classe_ID)
+    - Feuille 3 : Référence_Classes
                   (Classe_ID, Nom_Classe, Code_Filiere, Niveau, Annee_Scolaire)
 
     IMPORTANT :
       • Classe_ID doit correspondre à l'ID affiché dans la feuille "Référence_Classes".
-      • Code_Periode doit correspondre au libellé exact d'une période existante en base
-        (ex: "Semestre 1") pour la classe choisie.
+      • Code_Periode doit correspondre au libellé exact d'une période existante en base.
+      • Email_Enseignant est utilisé pour les notifications planning — renseigner si possible.
     """
     import io
     import pandas as pd
@@ -127,7 +129,6 @@ def generate_template_excel() -> bytes:
               .all()
         )
 
-        # Valeurs d'exemple : première classe dispo
         exemple_classe_id   = classes[0].id      if classes  else 1
         exemple_periode_lib = periodes[0].libelle if periodes else "Semestre 1"
 
@@ -137,51 +138,55 @@ def generate_template_excel() -> bytes:
             ref_data.append({
                 "Classe_ID"      : c.id,
                 "Nom_Classe"     : c.nom,
-                "Code_Filiere"   : c.filiere.code  if c.filiere else "",
+                "Code_Filiere"   : c.filiere.code   if c.filiere else "",
                 "Filiere_Libelle": c.filiere.libelle if c.filiere else "",
                 "Niveau"         : c.niveau,
                 "Annee_Scolaire" : c.annee_scolaire,
             })
         df_ref = pd.DataFrame(ref_data) if ref_data else pd.DataFrame(columns=[
-            "Classe_ID", "Nom_Classe", "Code_Filiere",
-            "Filiere_Libelle", "Niveau", "Annee_Scolaire"
+            "Classe_ID", "Nom_Classe", "Code_Filiere", "Filiere_Libelle",
+            "Niveau", "Annee_Scolaire"
         ])
 
     finally:
         db.close()
 
-    # ── DataFrames UE et Modules ───────────────────────────────
+    # ── DataFrame UE ──────────────────────────────────────────
     df_ue = pd.DataFrame(columns=[
         "Code_UE", "Libelle_UE", "Coefficient_UE", "Code_Periode", "Classe_ID"
     ])
     df_ue.loc[0] = ["UE-STAT", "Statistiques et Probabilites", 4, exemple_periode_lib, exemple_classe_id]
     df_ue.loc[1] = ["UE-ECO",  "Economie Generale",            3, exemple_periode_lib, exemple_classe_id]
 
+    # ── DataFrame Modules — MODIFIÉ : ajout Email_Enseignant ──
     df_mod = pd.DataFrame(columns=[
         "Code_Module", "Libelle_Module", "Code_UE_Parent",
-        "Enseignant", "Coefficient_Module", "Volume_Horaire_h", "Classe_ID"
+        "Enseignant", "Email_Enseignant",
+        "Coefficient_Module", "Volume_Horaire_h", "Classe_ID"
     ])
-    df_mod.loc[0] = ["MOD-STAT1", "Statistiques Descriptives", "UE-STAT", "Dr. Diallo",  2, 30, exemple_classe_id]
-    df_mod.loc[1] = ["MOD-STAT2", "Probabilites",              "UE-STAT", "Dr. Ndiaye",  2, 25, exemple_classe_id]
-    df_mod.loc[2] = ["MOD-ECO1",  "Microeconomie",             "UE-ECO",  "Dr. Ba",      3, 40, exemple_classe_id]
+    df_mod.loc[0] = ["MOD-STAT1", "Statistiques Descriptives", "UE-STAT",
+                     "Dr. Diallo", "diallo@ensae.sn",  2, 30, exemple_classe_id]
+    df_mod.loc[1] = ["MOD-STAT2", "Probabilites",              "UE-STAT",
+                     "Dr. Ndiaye", "ndiaye@ensae.sn",  2, 25, exemple_classe_id]
+    df_mod.loc[2] = ["MOD-ECO1",  "Microeconomie",             "UE-ECO",
+                     "Dr. Ba",     "ba@ensae.sn",       3, 40, exemple_classe_id]
 
     # ── Écriture Excel ─────────────────────────────────────────
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df_ue.to_excel(writer,  sheet_name="UE",                 index=False)
-        df_mod.to_excel(writer, sheet_name="Modules",            index=False)
-        df_ref.to_excel(writer, sheet_name="Référence_Classes",  index=False)
+        df_ue.to_excel(writer,  sheet_name="UE",                index=False)
+        df_mod.to_excel(writer, sheet_name="Modules",           index=False)
+        df_ref.to_excel(writer, sheet_name="Référence_Classes", index=False)
 
         wb = writer.book
         from openpyxl.styles import PatternFill, Font, Alignment
 
-        # ── Couleurs en-têtes ──────────────────────────────────
-        FILL_UE  = PatternFill("solid", fgColor="003580")   # bleu ENSAE
-        FILL_MOD = PatternFill("solid", fgColor="006B3F")   # vert ENSAE
-        FILL_REF = PatternFill("solid", fgColor="4B0082")   # violet (lecture seule)
-        FILL_CID = PatternFill("solid", fgColor="FFF3CD")   # jaune pâle — colonne Classe_ID
+        FILL_UE  = PatternFill("solid", fgColor="003580")
+        FILL_MOD = PatternFill("solid", fgColor="006B3F")
+        FILL_REF = PatternFill("solid", fgColor="4B0082")
+        FILL_CID = PatternFill("solid", fgColor="FFF3CD")
+        FILL_EMAIL = PatternFill("solid", fgColor="E8F5E9")   # vert pâle — Email_Enseignant
         FONT_W   = Font(color="FFFFFF", bold=True, name="Calibri")
-        FONT_B   = Font(color="111827", bold=True, name="Calibri")
         ALIGN_C  = Alignment(horizontal="center")
 
         # ── Style feuille UE ───────────────────────────────────
@@ -192,19 +197,14 @@ def generate_template_excel() -> bytes:
             cell.alignment = ALIGN_C
         for col in ws_ue.columns:
             ws_ue.column_dimensions[col[0].column_letter].width = 26
-
-        # Mettre en évidence la colonne Classe_ID (col 5 = E)
         _highlight_classe_id_col(ws_ue, col_letter="E", fill=FILL_CID)
-
-        # Note d'aide dans la cellule E1
         ws_ue["E1"].comment = _make_comment(
             "⚠ Classe_ID requis\nConsultez la feuille 'Référence_Classes' "
             "pour obtenir l'ID de votre classe."
         )
 
-        # Validation données : liste des IDs de classes (feuille Référence_Classes)
-        if len(df_ref) > 0:
-            nb_classes = len(df_ref)
+        nb_classes = len(df_ref)
+        if nb_classes > 0:
             dv_ue = DataValidation(
                 type="list",
                 formula1=f"'Référence_Classes'!$A$2:$A${nb_classes + 1}",
@@ -214,9 +214,10 @@ def generate_template_excel() -> bytes:
                 error="Choisissez un ID dans la feuille 'Référence_Classes'."
             )
             ws_ue.add_data_validation(dv_ue)
-            dv_ue.add(f"E2:E1000")
+            dv_ue.add("E2:E1000")
 
         # ── Style feuille Modules ──────────────────────────────
+        # MODIFIÉ : Email_Enseignant est en col E (nouveau), Classe_ID en col H
         ws_mod = writer.sheets["Modules"]
         for cell in ws_mod[1]:
             cell.fill      = FILL_MOD
@@ -225,13 +226,20 @@ def generate_template_excel() -> bytes:
         for col in ws_mod.columns:
             ws_mod.column_dimensions[col[0].column_letter].width = 26
 
-        # Colonne Classe_ID = col 7 (G)
-        _highlight_classe_id_col(ws_mod, col_letter="G", fill=FILL_CID)
-        ws_mod["G1"].comment = _make_comment(
+        # Mettre en vert pâle la colonne Email_Enseignant (col E = 5)
+        _highlight_classe_id_col(ws_mod, col_letter="E", fill=FILL_EMAIL)
+        ws_mod["E1"].comment = _make_comment(
+            "Email de l'enseignant (optionnel mais recommandé).\n"
+            "Utilisé pour les notifications automatiques lors de la validation du planning."
+        )
+
+        # Colonne Classe_ID = col H (décalée car Email_Enseignant ajouté)
+        _highlight_classe_id_col(ws_mod, col_letter="H", fill=FILL_CID)
+        ws_mod["H1"].comment = _make_comment(
             "⚠ Classe_ID requis\nConsultez la feuille 'Référence_Classes' "
             "pour obtenir l'ID de votre classe."
         )
-        if len(df_ref) > 0:
+        if nb_classes > 0:
             dv_mod = DataValidation(
                 type="list",
                 formula1=f"'Référence_Classes'!$A$2:$A${nb_classes + 1}",
@@ -241,7 +249,7 @@ def generate_template_excel() -> bytes:
                 error="Choisissez un ID dans la feuille 'Référence_Classes'."
             )
             ws_mod.add_data_validation(dv_mod)
-            dv_mod.add("G2:G1000")
+            dv_mod.add("H2:H1000")
 
         # ── Style feuille Référence_Classes ───────────────────
         ws_ref = writer.sheets["Référence_Classes"]
@@ -250,7 +258,6 @@ def generate_template_excel() -> bytes:
             cell.font      = FONT_W
             cell.alignment = ALIGN_C
 
-        # Colonne Classe_ID en gras + fond bleu clair
         FILL_ID_REF = PatternFill("solid", fgColor="DBEAFE")
         for row in ws_ref.iter_rows(min_row=2, min_col=1, max_col=1):
             for cell in row:
@@ -262,12 +269,7 @@ def generate_template_excel() -> bytes:
         for i, w in enumerate(col_widths, start=1):
             ws_ref.column_dimensions[get_column_letter(i)].width = w
 
-        # Figer la première ligne + protéger la feuille en lecture
         ws_ref.freeze_panes = "A2"
-
-        # Bandeau d'avertissement ligne 1 — pas de protection car openpyxl
-        # ne supporte pas sheet.protection facilement sans mot de passe
-        # On ajoute juste une note explicative dans A1
         ws_ref["A1"].comment = _make_comment(
             "⚠ NE PAS MODIFIER cette feuille.\n"
             "Elle est générée automatiquement depuis la base de données.\n"
@@ -276,6 +278,7 @@ def generate_template_excel() -> bytes:
 
     buffer.seek(0)
     return buffer.read()
+
 
 # ── Helpers ───────────────────────────────────────────────────
 
@@ -292,27 +295,23 @@ def _make_comment(text: str):
     """Crée un commentaire openpyxl."""
     from openpyxl.comments import Comment
     c = Comment(text, "SGA ENSAE")
-    c.width  = 260
-    c.height = 80
+    c.width  = 280
+    c.height = 90
     return c
 
 
-
 # ============================================================
-#  IMPORT EXCEL EN MASSE  — VERSION CORRIGEE
+#  IMPORT EXCEL EN MASSE
 # ============================================================
 
 def import_from_excel(contents: str) -> tuple[int, int, list]:
     """
     Importe UE et Modules depuis un fichier Excel.
-    Retourne (nb_ue, nb_modules, erreurs/avertissements)
+    Retourne (nb_ue, nb_modules, erreurs/avertissements).
 
-    CORRECTION : la recherche de periode se fait desormais par
-    (libelle + classe_id) pour eviter l'erreur "Periode introuvable"
-    quand la table periodes n'a pas de libelle unique global.
-    Si la periode n'est pas trouvee avec le couple (libelle, classe_id),
-    on tente un fallback par libelle seul pour rester compatible
-    avec les BDD qui ont des periodes globales.
+    MODIFIÉ : lecture de Email_Enseignant dans la feuille Modules.
+    La recherche de periode se fait par (libelle + classe_id) avec
+    fallback sur libelle seul pour compatibilité.
     """
     content_type, content_string = contents.split(",")
     decoded   = base64.b64decode(content_string)
@@ -340,45 +339,38 @@ def import_from_excel(contents: str) -> tuple[int, int, list]:
                     libelle_periode = str(row["Code_Periode"]).strip()
                     classe_id       = int(row["Classe_ID"])
 
-                    # --- FIX : chercher la periode par (libelle + classe_id) en priorite ---
+                    # Recherche periode par (libelle + classe_id) puis fallback libelle seul
                     periode = db.query(Periode).filter(
                         Periode.libelle   == libelle_periode,
                         Periode.classe_id == classe_id
                     ).first()
-
-                    # Fallback : libelle seul (periodes globales / anciennes BDD)
                     if not periode:
                         periode = db.query(Periode).filter(
                             Periode.libelle == libelle_periode
                         ).first()
-
                     if not periode:
                         erreurs.append(
                             f"Periode '{libelle_periode}' introuvable pour UE '{code}' "
-                            f"(classe_id={classe_id}). "
-                            f"Verifiez que la periode existe en base pour cette classe."
+                            f"(classe_id={classe_id})."
                         )
                         continue
 
-                    ue = UE(
-                        code        = code,
-                        libelle     = str(row["Libelle_UE"]).strip(),
-                        coefficient = float(row["Coefficient_UE"]),
-                        periode_id  = periode.id
+                    coef = float(row.get("Coefficient_UE", 1.0))
+                    ue   = UE(
+                        code       = code,
+                        libelle    = str(row["Libelle_UE"]).strip(),
+                        coefficient= coef,
+                        periode_id = periode.id,
                     )
                     db.add(ue)
                     db.flush()
-
-                    # Liaison UE ↔ Classe
                     db.add(UEClasse(ue_id=ue.id, classe_id=classe_id))
                     nb_ue += 1
 
                 except Exception as e:
-                    erreurs.append(f"Erreur UE ligne {idx + 2} : {str(e)}")
+                    erreurs.append(f"UE ligne {idx + 2} : {str(e)}")
 
-            db.commit()
-
-        # ── Import Modules ────────────────────────────────────
+        # ── Import Modules — MODIFIÉ : lecture Email_Enseignant ──
         if "Modules" in xl.sheet_names:
             df_mod = xl.parse("Modules")
             for idx, row in df_mod.iterrows():
@@ -391,35 +383,45 @@ def import_from_excel(contents: str) -> tuple[int, int, list]:
                         erreurs.append(f"Module '{code}' existe deja — ignore.")
                         continue
 
-                    code_ue_parent = str(row["Code_UE_Parent"]).strip()
-                    ue = db.query(UE).filter(UE.code == code_ue_parent).first()
+                    code_ue   = str(row["Code_UE_Parent"]).strip()
+                    classe_id = int(row["Classe_ID"])
+                    ue        = db.query(UE).filter(UE.code == code_ue).first()
                     if not ue:
                         erreurs.append(
-                            f"UE parente '{code_ue_parent}' introuvable pour module '{code}'. "
-                            f"Verifiez que l'UE a bien ete importee avant les modules."
+                            f"UE parente '{code_ue}' introuvable pour module '{code}'."
                         )
                         continue
 
+                    enseignant = str(row.get("Enseignant", "")).strip()
+                    if enseignant.upper() == "NAN":
+                        enseignant = ""
+
+                    # ← NOUVEAU : lecture Email_Enseignant
+                    email_ens = str(row.get("Email_Enseignant", "")).strip()
+                    if email_ens.upper() == "NAN":
+                        email_ens = ""
+
                     m = Module(
-                        code          = code,
-                        libelle       = str(row["Libelle_Module"]).strip(),
-                        enseignant    = str(row.get("Enseignant", "")).strip() or None,
-                        coefficient   = float(row["Coefficient_Module"]),
-                        volume_horaire= int(row["Volume_Horaire_h"]),
-                        ue_id         = ue.id,
-                        classe_id     = int(row["Classe_ID"])
+                        code             = code,
+                        libelle          = str(row["Libelle_Module"]).strip(),
+                        enseignant       = enseignant or None,
+                        email_enseignant = email_ens or None,   # ← NOUVEAU
+                        coefficient      = float(row.get("Coefficient_Module", 1.0)),
+                        volume_horaire   = int(row.get("Volume_Horaire_h", 0)),
+                        ue_id            = ue.id,
+                        classe_id        = classe_id,
                     )
                     db.add(m)
                     nb_modules += 1
 
                 except Exception as e:
-                    erreurs.append(f"Erreur Module ligne {idx + 2} : {str(e)}")
+                    erreurs.append(f"Module ligne {idx + 2} : {str(e)}")
 
-            db.commit()
+        db.commit()
 
     except Exception as e:
         db.rollback()
-        erreurs.append(f"Erreur fatale lors de l'import : {str(e)}")
+        erreurs.append(f"Erreur globale : {str(e)}")
     finally:
         db.close()
 
@@ -427,76 +429,92 @@ def import_from_excel(contents: str) -> tuple[int, int, list]:
 
 
 # ============================================================
-#  COMPOSANTS UI
-# ============================================================
-
-def progress_bar(pct: int):
-    color = VERT if pct >= 70 else OR if pct >= 30 else "#ef4444"
-    return html.Div(style={"background": "#f3f4f6", "borderRadius": "999px", "height": "6px", "overflow": "hidden"}, children=[
-        html.Div(style={
-            "width": f"{pct}%", "height": "100%",
-            "background": color, "borderRadius": "999px",
-            "transition": "width 0.4s ease"
-        })
-    ])
-
-def section_title(text):
-    return html.H6(text, style={
-        "fontFamily": "'Montserrat', sans-serif", "fontWeight": "700",
-        "color": "#374151", "marginBottom": "14px", "fontSize": "0.82rem",
-        "textTransform": "uppercase", "letterSpacing": "0.05em"
-    })
-
-def label_style():
-    return {
-        "fontWeight": "600", "fontSize": "0.82rem", "color": "#374151",
-        "marginBottom": "6px", "display": "block", "fontFamily": "'Inter', sans-serif"
-    }
-
-def input_style():
-    return {
-        "borderRadius": "8px", "border": "1.5px solid #d1d5db",
-        "fontSize": "0.875rem", "fontFamily": "'Inter', sans-serif"
-    }
-
-def field(label_text, component):
-    return html.Div(style={"marginBottom": "14px"}, children=[
-        html.Label(label_text, style=label_style()),
-        component
-    ])
-
-def btn_primary(label, btn_id, color=BLEU):
-    return html.Button(label, id=btn_id, n_clicks=0, style={
-        "background": color, "color": "#ffffff", "border": "none",
-        "borderRadius": "8px", "padding": "9px 18px",
-        "fontFamily": "'Montserrat', sans-serif", "fontWeight": "600",
-        "fontSize": "0.82rem", "cursor": "pointer"
-    })
-
-def btn_outline(label, btn_id):
-    return html.Button(label, id=btn_id, n_clicks=0, style={
-        "background": "transparent", "color": "#6b7280",
-        "border": "1px solid #d1d5db", "borderRadius": "8px",
-        "padding": "9px 18px", "fontFamily": "'Inter', sans-serif",
-        "cursor": "pointer", "marginLeft": "8px"
-    })
-
-
-# ============================================================
 #  LAYOUT
 # ============================================================
 
+def input_style():
+    return {
+        "fontFamily": "'Inter', sans-serif",
+        "fontSize"  : "0.875rem",
+        "borderRadius": "8px",
+        "border"    : "1px solid #e5e7eb",
+    }
+
+def field(label, component):
+    return html.Div([
+        html.Label(label, style={
+            "fontFamily": "'Inter', sans-serif",
+            "fontSize"  : "0.78rem",
+            "fontWeight": "600",
+            "color"     : "#374151",
+            "marginBottom": "4px",
+            "display"   : "block"
+        }),
+        component
+    ], style={"marginBottom": "14px"})
+
+def btn_primary(label, id_, color):
+    return html.Button(label, id=id_, n_clicks=0, style={
+        "background"  : color,
+        "color"       : "#ffffff",
+        "border"      : "none",
+        "borderRadius": "8px",
+        "padding"     : "8px 20px",
+        "fontFamily"  : "'Inter', sans-serif",
+        "fontWeight"  : "600",
+        "fontSize"    : "0.82rem",
+        "cursor"      : "pointer",
+        "marginRight" : "8px",
+    })
+
+def btn_outline(label, id_):
+    return html.Button(label, id=id_, n_clicks=0, style={
+        "background"  : "transparent",
+        "color"       : "#6b7280",
+        "border"      : "1px solid #d1d5db",
+        "borderRadius": "8px",
+        "padding"     : "8px 20px",
+        "fontFamily"  : "'Inter', sans-serif",
+        "fontWeight"  : "500",
+        "fontSize"    : "0.82rem",
+        "cursor"      : "pointer",
+    })
+
+def progress_bar(pct):
+    color = VERT if pct >= 75 else OR if pct >= 40 else "#ef4444"
+    return html.Div([
+        html.Div(style={
+            "width": f"{pct}%", "height": "6px",
+            "background": color, "borderRadius": "4px",
+            "transition": "width 0.3s ease"
+        })
+    ], style={
+        "width": "100%", "height": "6px",
+        "background": "#e5e7eb", "borderRadius": "4px"
+    })
+
+
 layout = html.Div([
-    dcc.Store(id="cours-ue-selectionnee"),
+    dcc.Store(id="session-store", storage_type="session"),
     dcc.Download(id="download-template-excel"),
 
-    # -- En-tete --
-    html.Div(style={"marginBottom": "28px"}, children=[
-        html.H4("Cours et Unites d'Enseignement", style={
-            "fontFamily": "'Montserrat', sans-serif", "fontWeight": "800",
-            "color": BLEU, "margin": "0"
+    # -- Retour + En-tête --
+    html.Div(style={"marginBottom": "24px"}, children=[
+        html.A(href="/dashboard", style={
+            "textDecoration": "none", "display": "inline-flex",
+            "alignItems": "center", "gap": "6px", "marginBottom": "12px",
+            "color": "#6b7280", "fontFamily": "'Inter', sans-serif",
+            "fontSize": "0.82rem", "fontWeight": "500"
+        }, children=[
+            html.Span("arrow_back", className="material-symbols-outlined",
+                      style={"fontSize": "18px", "verticalAlign": "middle"}),
+            "Retour au tableau de bord"
+        ]),
+        html.H4("Cours et UE", style={
+            "fontFamily": "'Montserrat', sans-serif",
+            "fontWeight": "800", "color": BLEU, "margin": "0"
         }),
-        html.P("Gestion des UE, modules et progression horaire", style={
+        html.P("Gestion des Unités d'Enseignement et des modules pédagogiques", style={
             "color": "#6b7280", "fontFamily": "'Inter', sans-serif", "margin": "4px 0 0"
         })
     ]),
@@ -641,9 +659,9 @@ layout = html.Div([
         dbc.ModalBody([
             field("Code UE",    dbc.Input(id="ue-code",    placeholder="ex: UE-STAT",  style=input_style())),
             field("Libelle",    dbc.Input(id="ue-libelle", placeholder="ex: Statistiques et Probabilites", style=input_style())),
-            field("Periode",    dcc.Dropdown(id="ue-periode",    placeholder="Selectionner une periode",
+            field("Periode",    dcc.Dropdown(id="ue-periode",  placeholder="Selectionner une periode",
                                              style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"})),
-            field("Classe(s)",  dcc.Dropdown(id="ue-classes",    placeholder="Selectionner une ou plusieurs classes",
+            field("Classe(s)",  dcc.Dropdown(id="ue-classes",  placeholder="Selectionner une ou plusieurs classes",
                                              multi=True,
                                              style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"})),
             field("Coefficient", dbc.Input(id="ue-coefficient", type="number", min=1, max=10, step=0.5, value=1, style=input_style())),
@@ -655,17 +673,25 @@ layout = html.Div([
         ])
     ], id="modal-ue", is_open=False),
 
-    # -- Modal Module --
+    # -- Modal Module — MODIFIÉ : champ Email Enseignant ajouté --
     dbc.Modal([
         dbc.ModalHeader(dbc.ModalTitle("Ajouter un Module")),
         dbc.ModalBody([
-            field("UE parente",  dcc.Dropdown(id="module-ue",     placeholder="Selectionner une UE",
+            field("UE parente",  dcc.Dropdown(id="module-ue",    placeholder="Selectionner une UE",
                                               style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"})),
-            field("Classe",      dcc.Dropdown(id="module-classe",  placeholder="Selectionner une classe",
+            field("Classe",      dcc.Dropdown(id="module-classe", placeholder="Selectionner une classe",
                                               style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"})),
             field("Code Module", dbc.Input(id="module-code",      placeholder="ex: MOD-STAT1", style=input_style())),
             field("Libelle",     dbc.Input(id="module-libelle",   placeholder="ex: Statistiques Descriptives", style=input_style())),
-            field("Enseignant",  dbc.Input(id="module-enseignant",placeholder="ex: Dr. Diallo", style=input_style())),
+            field("Enseignant",  dbc.Input(id="module-enseignant", placeholder="ex: Dr. Diallo", style=input_style())),
+            # ← NOUVEAU champ
+            field("Email Enseignant",
+                  dbc.Input(
+                      id="module-email-enseignant",
+                      type="email",
+                      placeholder="ex: diallo@ensae.sn  (optionnel — pour les notifs planning)",
+                      style=input_style()
+                  )),
             field("Coefficient", dbc.Input(id="module-coefficient", type="number", min=1, max=10, step=0.5, value=1, style=input_style())),
             field("Volume horaire (h)", dbc.Input(id="module-volume", type="number", min=1, step=1, placeholder="ex: 30", style=input_style())),
             html.Div(id="module-feedback", style={"color": "#ef4444", "fontSize": "0.8rem"})
@@ -720,8 +746,8 @@ def load_ues_dropdown(classe_id, _):
 
 
 @callback(
-    Output("cours-liste-ue",  "children"),
-    Output("cours-nb-ue",     "children"),
+    Output("cours-liste-ue", "children"),
+    Output("cours-nb-ue",    "children"),
     Input("cours-filtre-classe", "value"),
     Input("cours-refresh",       "children")
 )
@@ -736,39 +762,27 @@ def afficher_ues(classe_id, _):
     items = [
         html.Div(
             id={"type": "ue-item", "index": u["id"]},
+            n_clicks=0,
             style={
                 "padding": "12px 14px", "borderRadius": "8px",
-                "border": "1.5px solid #e5e7eb", "marginBottom": "8px",
-                "cursor": "pointer", "background": "#fafafa",
-                "transition": "border-color 0.2s"
+                "border": "1px solid #e5e7eb", "marginBottom": "8px",
+                "cursor": "pointer", "background": "#fafafa"
             },
             children=[
-                html.Div(style={"display": "flex", "justifyContent": "space-between", "alignItems": "center"}, children=[
-                    html.Div([
-                        html.Span(u["code"], style={
-                            "background": f"{BLEU}15", "color": BLEU,
-                            "padding": "2px 7px", "borderRadius": "4px",
-                            "fontSize": "0.7rem", "fontWeight": "700",
-                            "fontFamily": "'Montserrat', sans-serif", "marginRight": "8px"
-                        }),
-                        html.Span(u["libelle"], style={
-                            "fontWeight": "600", "color": "#111827",
-                            "fontSize": "0.85rem", "fontFamily": "'Inter', sans-serif"
-                        }),
-                    ]),
+                html.Div(style={"display": "flex", "justifyContent": "space-between"}, children=[
+                    html.Span(f"{u['code']} — {u['libelle']}", style={
+                        "fontFamily": "'Inter', sans-serif",
+                        "fontWeight": "600", "fontSize": "0.875rem", "color": BLEU
+                    }),
                     html.Span(f"Coef. {u['coefficient']}", style={
-                        "color": "#6b7280", "fontSize": "0.72rem", "fontFamily": "'Inter', sans-serif"
+                        "color": "#6b7280", "fontSize": "0.72rem",
+                        "fontFamily": "'Inter', sans-serif"
                     })
                 ]),
-                html.Div(style={"marginTop": "5px", "display": "flex", "gap": "10px"}, children=[
-                    html.Span(u["periode"], style={
-                        "color": "#9ca3af", "fontSize": "0.7rem", "fontFamily": "'Inter', sans-serif"
-                    }),
-                    html.Span(f"{u['nb_modules']} module(s)", style={
-                        "color": VERT, "fontSize": "0.7rem",
-                        "fontFamily": "'Inter', sans-serif", "fontWeight": "600"
-                    }),
-                ])
+                html.Span(f"Periode : {u['periode']}  |  {u['nb_modules']} module(s)", style={
+                    "color": "#9ca3af", "fontSize": "0.72rem",
+                    "fontFamily": "'Inter', sans-serif"
+                })
             ]
         )
         for u in ues
@@ -777,37 +791,28 @@ def afficher_ues(classe_id, _):
 
 
 @callback(
-    Output("cours-ue-selectionnee", "data"),
-    Input({"type": "ue-item", "index": dash.ALL}, "n_clicks"),
-    prevent_initial_call=True
-)
-def selectionner_ue(clicks):
-    if not any(clicks):
-        return dash.no_update
-    triggered = ctx.triggered_id
-    if triggered and isinstance(triggered, dict):
-        return triggered["index"]
-    return dash.no_update
-
-
-@callback(
     Output("cours-liste-modules", "children"),
     Output("cours-nb-modules",    "children"),
     Output("cours-hint-modules",  "style"),
-    Input("cours-ue-selectionnee", "data"),
-    Input("cours-refresh",         "children")
+    Input({"type": "ue-item", "index": dash.ALL}, "n_clicks"),
+    Input("cours-refresh", "children"),
+    prevent_initial_call=True
 )
-def afficher_modules(ue_id, _):
-    hint_visible = {"color": "#9ca3af", "fontSize": "0.78rem",
-                    "fontFamily": "'Inter', sans-serif", "margin": "0 0 10px"}
-    hint_hidden  = {"display": "none"}
+def afficher_modules(clicks, _):
+    hint_hidden = {"display": "none"}
+    if not any(clicks):
+        return html.Div(), "0", {"color": "#9ca3af", "fontSize": "0.78rem",
+                                  "fontFamily": "'Inter', sans-serif", "margin": "0 0 10px"}
 
-    if not ue_id:
-        return html.Div(), "0", hint_visible
+    triggered = ctx.triggered_id
+    if not triggered or not isinstance(triggered, dict):
+        return html.Div(), "0", hint_hidden
 
+    ue_id   = triggered["index"]
     modules = get_modules(ue_id)
+
     if not modules:
-        return html.P("Aucun module dans cette UE.", style={
+        return html.P("Aucun module pour cette UE.", style={
             "color": "#9ca3af", "fontFamily": "'Inter', sans-serif",
             "fontSize": "0.875rem", "textAlign": "center", "padding": "20px"
         }), "0", hint_hidden
@@ -816,32 +821,30 @@ def afficher_modules(ue_id, _):
         html.Div(
             style={
                 "padding": "12px 14px", "borderRadius": "8px",
-                "border": "1.5px solid #e5e7eb", "marginBottom": "8px",
+                "border": "1px solid #e5e7eb", "marginBottom": "8px",
                 "background": "#fafafa"
             },
             children=[
-                html.Div(style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
-                                "marginBottom": "6px"}, children=[
-                    html.Div([
-                        html.Span(m["code"], style={
-                            "background": f"{VERT}15", "color": VERT,
-                            "padding": "2px 7px", "borderRadius": "4px",
-                            "fontSize": "0.7rem", "fontWeight": "700",
-                            "fontFamily": "'Montserrat', sans-serif", "marginRight": "8px"
-                        }),
-                        html.Span(m["libelle"], style={
-                            "fontWeight": "600", "color": "#111827",
-                            "fontSize": "0.85rem", "fontFamily": "'Inter', sans-serif"
-                        }),
-                    ]),
+                html.Div(style={"display": "flex", "justifyContent": "space-between"}, children=[
+                    html.Span(f"{m['code']} — {m['libelle']}", style={
+                        "fontFamily": "'Inter', sans-serif",
+                        "fontWeight": "600", "fontSize": "0.875rem", "color": VERT
+                    }),
                     html.Span(f"Coef. {m['coefficient']}", style={
-                        "color": "#6b7280", "fontSize": "0.72rem", "fontFamily": "'Inter', sans-serif"
+                        "color": "#6b7280", "fontSize": "0.72rem",
+                        "fontFamily": "'Inter', sans-serif"
                     })
                 ]),
-                html.Span(f"Enseignant : {m['enseignant']}  |  {m['heures_faites']}h / {m['volume_horaire']}h", style={
-                    "color": "#6b7280", "fontSize": "0.75rem",
-                    "fontFamily": "'Inter', sans-serif", "display": "block", "marginBottom": "8px"
-                }),
+                html.Span(
+                    f"Enseignant : {m['enseignant']}"
+                    + (f"  ({m['email_enseignant']})" if m['email_enseignant'] else "")
+                    + f"  |  {m['heures_faites']}h / {m['volume_horaire']}h",
+                    style={
+                        "color": "#6b7280", "fontSize": "0.75rem",
+                        "fontFamily": "'Inter', sans-serif",
+                        "display": "block", "marginBottom": "8px"
+                    }
+                ),
                 progress_bar(m["progression"])
             ]
         )
@@ -853,9 +856,9 @@ def afficher_modules(ue_id, _):
 # -- Modals --
 @callback(
     Output("modal-ue", "is_open"),
-    Input("btn-open-ue",    "n_clicks"),
-    Input("btn-cancel-ue",  "n_clicks"),
-    Input("btn-save-ue",    "n_clicks"),
+    Input("btn-open-ue",   "n_clicks"),
+    Input("btn-cancel-ue", "n_clicks"),
+    Input("btn-save-ue",   "n_clicks"),
     prevent_initial_call=True
 )
 def toggle_modal_ue(o, c, s):
@@ -875,15 +878,15 @@ def toggle_modal_module(o, c, s):
 
 # -- Sauvegarde UE --
 @callback(
-    Output("ue-feedback",     "children"),
-    Output("cours-refresh",   "children"),
-    Output("modal-ue",        "is_open", allow_duplicate=True),
-    Input("btn-save-ue",      "n_clicks"),
-    State("ue-code",          "value"),
-    State("ue-libelle",       "value"),
-    State("ue-periode",       "value"),
-    State("ue-classes",       "value"),
-    State("ue-coefficient",   "value"),
+    Output("ue-feedback",   "children"),
+    Output("cours-refresh", "children"),
+    Output("modal-ue",      "is_open", allow_duplicate=True),
+    Input("btn-save-ue",    "n_clicks"),
+    State("ue-code",        "value"),
+    State("ue-libelle",     "value"),
+    State("ue-periode",     "value"),
+    State("ue-classes",     "value"),
+    State("ue-coefficient", "value"),
     prevent_initial_call=True
 )
 def save_ue(n, code, libelle, periode_id, classes, coef):
@@ -907,32 +910,42 @@ def save_ue(n, code, libelle, periode_id, classes, coef):
         db.close()
 
 
-# -- Sauvegarde Module --
+# -- Sauvegarde Module — MODIFIÉ : State + stockage email_enseignant --
 @callback(
-    Output("module-feedback",    "children"),
-    Output("cours-refresh",      "children", allow_duplicate=True),
-    Output("modal-module",       "is_open",  allow_duplicate=True),
-    Input("btn-save-module",     "n_clicks"),
-    State("module-ue",           "value"),
-    State("module-classe",       "value"),
-    State("module-code",         "value"),
-    State("module-libelle",      "value"),
-    State("module-enseignant",   "value"),
-    State("module-coefficient",  "value"),
-    State("module-volume",       "value"),
+    Output("module-feedback",        "children"),
+    Output("cours-refresh",          "children", allow_duplicate=True),
+    Output("modal-module",           "is_open",  allow_duplicate=True),
+    Input("btn-save-module",         "n_clicks"),
+    State("module-ue",               "value"),
+    State("module-classe",           "value"),
+    State("module-code",             "value"),
+    State("module-libelle",          "value"),
+    State("module-enseignant",       "value"),
+    State("module-email-enseignant", "value"),   # ← NOUVEAU
+    State("module-coefficient",      "value"),
+    State("module-volume",           "value"),
     prevent_initial_call=True
 )
-def save_module(n, ue_id, classe_id, code, libelle, enseignant, coef, volume):
+def save_module(n, ue_id, classe_id, code, libelle, enseignant, email_enseignant, coef, volume):
     if not all([ue_id, classe_id, code, libelle, coef, volume]):
         return "Tous les champs obligatoires doivent etre remplis.", "", True
     db = SessionLocal()
     try:
         if db.query(Module).filter(Module.code == code).first():
             return f"Le code '{code}' existe deja.", "", True
+
+        # Nettoyage email
+        email_ens = (email_enseignant or "").strip() or None
+
         m = Module(
-            code=code, libelle=libelle, enseignant=enseignant,
-            coefficient=float(coef), volume_horaire=int(volume),
-            ue_id=ue_id, classe_id=classe_id
+            code             = code,
+            libelle          = libelle,
+            enseignant       = enseignant,
+            email_enseignant = email_ens,   # ← NOUVEAU
+            coefficient      = float(coef),
+            volume_horaire   = int(volume),
+            ue_id            = ue_id,
+            classe_id        = classe_id,
         )
         db.add(m)
         db.commit()
@@ -957,9 +970,9 @@ def download_template(n):
 
 # -- Import Excel --
 @callback(
-    Output("import-feedback",  "children"),
-    Output("cours-refresh",    "children", allow_duplicate=True),
-    Input("cours-upload-excel","contents"),
+    Output("import-feedback",   "children"),
+    Output("cours-refresh",     "children", allow_duplicate=True),
+    Input("cours-upload-excel", "contents"),
     prevent_initial_call=True
 )
 def import_excel(contents):
