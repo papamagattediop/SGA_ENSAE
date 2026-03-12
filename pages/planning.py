@@ -12,7 +12,7 @@ from database import SessionLocal
 from models import (
     Planning, PlanningClasse, PlanningSeance,
     Classe, Module, User, ResponsableClasse,
-    ResponsableFiliere, StatutPlanningEnum
+    ResponsableFiliere, StatutPlanningEnum, Etudiant
 )
 from datetime import date, timedelta, datetime
 
@@ -82,6 +82,7 @@ def get_plannings(role, user_id, filtre_statut=None):
     - admin        → tous les plannings
     - resp_filiere → plannings des classes de sa filière
     - resp_classe  → plannings de ses classes uniquement
+    - eleve        → plannings validés de sa classe uniquement  ← CORRECTIF
     """
     db = SessionLocal()
     try:
@@ -108,6 +109,22 @@ def get_plannings(role, user_id, filtre_statut=None):
             q = q.join(PlanningClasse).filter(
                 PlanningClasse.classe_id.in_(classe_ids)
             )
+
+        # ── CAS ÉLÈVE : plannings validés de sa classe uniquement ──
+        elif role == "eleve":
+            etudiant = db.query(Etudiant).filter(
+                Etudiant.user_id == user_id
+            ).first()
+            if not etudiant:
+                return []
+            q = q.join(PlanningClasse).filter(
+                PlanningClasse.classe_id == etudiant.classe_id
+            )
+            # Par défaut, l'élève ne voit que les plannings validés
+            # (sauf s'il applique explicitement un autre filtre)
+            if not filtre_statut or filtre_statut == "tous":
+                q = q.filter(Planning.statut == StatutPlanningEnum.valide)
+        # ───────────────────────────────────────────────────────────
 
         if filtre_statut and filtre_statut != "tous":
             q = q.filter(Planning.statut == filtre_statut)
@@ -241,8 +258,6 @@ def _get_seances_list(planning) -> list:
     """
     Construit la liste de dicts de séances depuis un objet Planning ORM.
     Doit être appelé pendant que la session DB est encore active.
-
-    MODIFIÉ : ajout de email_enseignant dans chaque dict de séance.
     """
     seances = []
     for s in sorted(planning.planning_seances,
@@ -250,7 +265,6 @@ def _get_seances_list(planning) -> list:
         seances.append({
             "module"          : s.module.libelle if s.module else "-",
             "enseignant"      : s.module.enseignant if s.module and s.module.enseignant else "",
-            # ← NOUVEAU : email direct depuis la table modules (plus fiable que recherche par nom)
             "email_enseignant": s.module.email_enseignant if s.module and s.module.email_enseignant else "",
             "date"            : s.date.strftime("%d/%m/%Y") if s.date else "-",
             "jour"            : JOURS[s.date.weekday()] if s.date else "-",
@@ -263,54 +277,41 @@ def _get_seances_list(planning) -> list:
 def _notifier_professeurs(seances_list: list, classe_n: str, semaine: str) -> None:
     """
     Envoie un email individuel à chaque enseignant concerné lors de la validation.
-
-    MODIFIÉ : utilise directement email_enseignant stocké dans le dict de séance,
-    éliminant la recherche floue par correspondance de nom/prénom dans la table users
-    (qui échouait souvent en cas de différences de casse ou d'espace).
-
-    Fallback : si email_enseignant est vide, on tente la recherche par nom dans users
-    pour compatibilité avec les anciens modules sans email renseigné.
     """
     from utils.mailer import email_planning_prof
 
-    # Regrouper les séances par email d'enseignant (dédupliqué)
-    profs: dict[str, dict] = {}   # email -> {nom, seances}
-
+    profs = {}
     for s in seances_list:
-        email_ens = (s.get("email_enseignant") or "").strip()
-        nom_ens   = (s.get("enseignant") or "").strip()
+        email_prof = s.get("email_enseignant", "").strip()
+        nom_prof   = s.get("enseignant", "").strip()
+        if not email_prof:
+            # Fallback : recherche par nom dans la table User
+            if nom_prof:
+                db = SessionLocal()
+                try:
+                    parts = nom_prof.strip().split()
+                    u = None
+                    if len(parts) >= 2:
+                        u = db.query(User).filter(
+                            User.prenom == parts[0],
+                            User.nom    == parts[-1]
+                        ).first()
+                    if u and u.email:
+                        email_prof = u.email
+                    else:
+                        continue
+                finally:
+                    db.close()
+            else:
+                continue
 
-        if not nom_ens:
-            continue  # pas d'enseignant renseigné → ignorer
-
-        if email_ens:
-            # ← CAS NOMINAL : email direct disponible
-            if email_ens not in profs:
-                profs[email_ens] = {"nom": nom_ens, "seances": []}
-            profs[email_ens]["seances"].append(s)
-        else:
-            # ← FALLBACK : recherche par nom dans la table users
-            # (pour anciens modules sans email_enseignant renseigné)
-            db = SessionLocal()
-            try:
-                all_users = db.query(User).filter(User.is_active == True).all()
-                nom_lower = nom_ens.lower()
-                for u in all_users:
-                    full1 = f"{u.prenom} {u.nom}".strip().lower()
-                    full2 = f"{u.nom} {u.prenom}".strip().lower()
-                    if nom_lower in (full1, full2):
-                        key = u.email
-                        if key not in profs:
-                            profs[key] = {"nom": f"{u.prenom} {u.nom}", "seances": []}
-                        profs[key]["seances"].append(s)
-                        break
-            finally:
-                db.close()
+        if email_prof not in profs:
+            profs[email_prof] = {"nom": nom_prof or email_prof, "seances": []}
+        profs[email_prof]["seances"].append(s)
 
     if not profs:
         return
 
-    # Envoyer un email par enseignant avec ses séances uniquement
     for email_prof, data in profs.items():
         try:
             email_planning_prof(
@@ -321,7 +322,7 @@ def _notifier_professeurs(seances_list: list, classe_n: str, semaine: str) -> No
                 seances_prof = data["seances"],
             )
         except Exception:
-            pass   # ne jamais bloquer le workflow pour un email raté
+            pass
 
 
 # ============================================================
@@ -386,63 +387,97 @@ def btn_outline(label, btn_id, color="#6b7280"):
 
 def _render_detail_content(detail: dict):
     """Rendu HTML du détail d'un planning (sans les boutons d'action)."""
-    seances = detail.get("seances", [])
+    classes_str = ", ".join(detail.get("classes", [])) or "-"
+    commentaire = detail.get("commentaire", "")
+
     rows = []
-    for s in seances:
+    for s in detail.get("seances", []):
         rows.append(html.Tr([
-            html.Td(s["jour"],       style={"padding": "8px 10px", "fontSize": "0.82rem", "color": "#6b7280"}),
-            html.Td(s["date"],       style={"padding": "8px 10px", "fontSize": "0.82rem", "color": "#6b7280"}),
-            html.Td(s["module"],     style={"padding": "8px 10px", "fontSize": "0.82rem", "color": "#374151", "fontWeight": "500"}),
-            html.Td(s["enseignant"] or "—", style={"padding": "8px 10px", "fontSize": "0.82rem", "color": "#6b7280"}),
-            html.Td(f"{s['heure_debut']} – {s['heure_fin']}", style={"padding": "8px 10px", "fontSize": "0.82rem", "color": "#6b7280", "whiteSpace": "nowrap"}),
+            html.Td(s.get("jour", "-"), style={
+                "padding": "8px 12px", "fontSize": "0.8rem",
+                "color": "#374151", "fontFamily": "'Inter', sans-serif",
+                "fontWeight": "600"
+            }),
+            html.Td(s.get("date", "-"), style={
+                "padding": "8px 12px", "fontSize": "0.8rem",
+                "color": "#6b7280", "fontFamily": "'Inter', sans-serif"
+            }),
+            html.Td(s.get("module", "-"), style={
+                "padding": "8px 12px", "fontSize": "0.8rem",
+                "color": "#374151", "fontFamily": "'Inter', sans-serif"
+            }),
+            html.Td(s.get("enseignant", "-") or "-", style={
+                "padding": "8px 12px", "fontSize": "0.8rem",
+                "color": "#6b7280", "fontFamily": "'Inter', sans-serif"
+            }),
+            html.Td(
+                f"{s.get('heure_debut', '-')} – {s.get('heure_fin', '-')}",
+                style={
+                    "padding": "8px 12px", "fontSize": "0.8rem",
+                    "color": "#6b7280", "fontFamily": "'Inter', sans-serif",
+                    "whiteSpace": "nowrap"
+                }
+            ),
         ], style={"borderBottom": "1px solid #f3f4f6"}))
 
-    tableau = html.Table(
-        style={"width": "100%", "borderCollapse": "collapse", "marginTop": "12px"},
+    table = html.Table(
+        style={
+            "width": "100%", "borderCollapse": "collapse",
+            "border": "1px solid #e5e7eb", "borderRadius": "8px",
+            "overflow": "hidden", "marginTop": "12px"
+        },
         children=[
             html.Thead(html.Tr([
-                html.Th(col, style={"padding": "8px 10px", "textAlign": "left", "color": BLEU,
-                                    "fontWeight": "700", "fontSize": "0.72rem",
-                                    "textTransform": "uppercase", "borderBottom": "2px solid #e5e7eb"})
-                for col in ["Jour", "Date", "Module", "Enseignant", "Horaire"]
+                html.Th(h, style={
+                    "padding": "10px 12px", "fontSize": "0.72rem",
+                    "color": BLEU, "fontFamily": "'Montserrat', sans-serif",
+                    "fontWeight": "700", "textTransform": "uppercase",
+                    "borderBottom": "1px solid #e5e7eb",
+                    "background": f"{BLEU}10", "textAlign": "left"
+                })
+                for h in ["Jour", "Date", "Module", "Enseignant", "Horaire"]
             ])),
             html.Tbody(rows if rows else [
-                html.Tr(html.Td("Aucune séance.", colSpan=5,
-                                style={"padding": "16px", "textAlign": "center",
-                                       "color": "#9ca3af", "fontStyle": "italic"}))
+                html.Tr(html.Td(
+                    "Aucune séance enregistrée.",
+                    colSpan=5,
+                    style={
+                        "padding": "20px", "textAlign": "center",
+                        "color": "#9ca3af", "fontFamily": "'Inter', sans-serif",
+                        "fontSize": "0.82rem", "fontStyle": "italic"
+                    }
+                ))
             ])
         ]
     )
 
-    classes_str = ", ".join(detail.get("classes", []))
-    commentaire = detail.get("commentaire", "")
-
     return html.Div([
-        html.Div(style={"display": "flex", "gap": "12px", "alignItems": "center", "marginBottom": "8px"}, children=[
-            html.Span(f"Semaine du {detail['semaine']}", style={
-                "fontFamily": "'Montserrat', sans-serif", "fontWeight": "700",
-                "fontSize": "0.95rem", "color": BLEU
-            }),
+        html.Div(style={
+            "display": "flex", "justifyContent": "space-between",
+            "alignItems": "center", "marginBottom": "12px"
+        }, children=[
+            html.Div([
+                html.H6(f"Semaine du {detail['semaine']}", style={
+                    "fontFamily": "'Montserrat', sans-serif", "fontWeight": "700",
+                    "color": BLEU, "margin": "0 0 4px"
+                }),
+                html.Span(classes_str, style={
+                    "color": "#6b7280", "fontSize": "0.8rem",
+                    "fontFamily": "'Inter', sans-serif"
+                }),
+            ]),
             statut_badge(detail["statut"]),
         ]),
-        html.P(f"Classe(s) : {classes_str}", style={
-            "color": "#6b7280", "fontSize": "0.82rem",
-            "fontFamily": "'Inter', sans-serif", "margin": "0 0 4px"
-        }),
-        html.P(f"Créé le {detail['created_at']}", style={
-            "color": "#9ca3af", "fontSize": "0.75rem",
-            "fontFamily": "'Inter', sans-serif", "margin": "0 0 8px"
-        }),
-        tableau,
+        table,
         html.Div(
-            [html.Strong("Commentaire : "), commentaire],
             style={
-                "marginTop": "12px", "padding": "10px 14px",
-                "background": "#fffbeb", "borderRadius": "8px",
-                "border": "1px solid #fde68a",
-                "fontSize": "0.82rem", "fontFamily": "'Inter', sans-serif",
-                "color": "#374151", "display": "block" if commentaire else "none"
-            }
+                "background": "#fef3c7", "border": "1px solid #fde68a",
+                "borderRadius": "8px", "padding": "10px 14px", "marginTop": "12px",
+                "fontSize": "0.82rem", "color": "#92400e",
+                "fontFamily": "'Inter', sans-serif",
+                "display": "block" if commentaire else "none"
+            },
+            children=f"💬 {commentaire}"
         )
     ])
 
@@ -455,7 +490,6 @@ layout = html.Div([
     dcc.Store(id="planning-selectionne"),
     dcc.Store(id="planning-refresh"),
     dcc.Store(id="planning-session"),
-    # Store pour l'id du planning sélectionné — doit être dans le layout statique
     dcc.Store(id="planning-detail-id", data=None),
 
     # -- Retour + En-tête --
@@ -584,6 +618,7 @@ layout = html.Div([
                 "fontFamily": "'Montserrat', sans-serif",
                 "fontWeight": "700", "color": BLEU, "marginBottom": "12px"
             }),
+            dcc.Store(id="planning-nb-seances", data=1),
             html.Div(id="planning-seances-container"),
             html.Button(
                 "+ Ajouter une séance",
@@ -591,47 +626,43 @@ layout = html.Div([
                 n_clicks=0,
                 style={
                     "background": "transparent", "color": BLEU,
-                    "border": f"1.5px dashed {BLEU}", "borderRadius": "8px",
-                    "padding": "8px 16px", "fontFamily": "'Inter', sans-serif",
-                    "fontWeight": "600", "fontSize": "0.82rem",
-                    "cursor": "pointer", "width": "100%", "marginTop": "8px"
+                    "border": f"1px dashed {BLEU}", "borderRadius": "8px",
+                    "padding": "8px 16px", "cursor": "pointer",
+                    "fontFamily": "'Inter', sans-serif", "fontSize": "0.82rem",
+                    "marginTop": "8px", "width": "100%"
                 }
             ),
-            dcc.Store(id="planning-nb-seances", data=1),
-            html.Div(id="planning-modal-feedback",
-                     style={"color": "#ef4444", "fontSize": "0.8rem", "marginTop": "8px"})
+            html.Div(id="planning-modal-feedback", style={"marginTop": "12px"}),
         ]),
         dbc.ModalFooter([
-            btn_primary("Enregistrer comme brouillon", "btn-save-brouillon", "#6b7280"),
-            btn_primary("Soumettre",                   "btn-save-soumis",    BLEU),
-            btn_outline("Annuler",                     "btn-cancel-planning"),
+            btn_primary("Enregistrer (brouillon)", "btn-save-brouillon", "#6b7280"),
+            btn_primary("Soumettre pour validation", "btn-save-soumis", VERT),
+            btn_outline("Annuler", "btn-cancel-planning"),
         ])
     ], id="modal-planning", is_open=False, size="xl"),
 
-    # -- Modal validation (resp filière) --
+    # -- Modal validation --
     dbc.Modal([
         dbc.ModalHeader(dbc.ModalTitle("Valider / Rejeter le planning")),
         dbc.ModalBody([
             html.Div(id="modal-validation-content"),
             html.Hr(style={"borderColor": "#e5e7eb"}),
-            field("Commentaire (obligatoire si rejet ou modification)", dbc.Textarea(
+            field("Commentaire (obligatoire pour rejeter ou modifier)", dbc.Textarea(
                 id="validation-commentaire",
                 placeholder="Votre commentaire...",
-                rows=3,
-                style={**input_style(), "resize": "none"}
+                style={**input_style(), "minHeight": "80px"}
             )),
-            html.Div(id="validation-feedback",
-                     style={"color": "#ef4444", "fontSize": "0.8rem"})
+            html.Div(id="validation-feedback", style={
+                "color": "#ef4444", "fontSize": "0.82rem", "marginTop": "8px"
+            }),
         ]),
         dbc.ModalFooter([
-            btn_primary("Valider",  "btn-valider",  VERT),
-            btn_primary("Modifier", "btn-modifier", OR),
-            btn_primary("Rejeter",  "btn-rejeter",  "#ef4444"),
-            btn_outline("Annuler",  "btn-cancel-validation"),
+            btn_primary("✅ Valider",   "btn-valider",          VERT),
+            btn_primary("✏️ Modifier",  "btn-modifier",          OR),
+            btn_primary("❌ Rejeter",   "btn-rejeter",          "#ef4444"),
+            btn_outline("Annuler",      "btn-cancel-validation"),
         ])
     ], id="modal-validation", is_open=False, size="lg"),
-
-    html.Div(id="planning-dummy", style={"display": "none"})
 ])
 
 
@@ -649,6 +680,7 @@ def init_page(session):
         return None, html.Div()
     role = session.get("role", "")
     btns = []
+    # ── Un élève ne voit aucun bouton d'action ──
     if role in ("resp_classe", "admin"):
         btns.append(btn_primary("+ Nouveau planning", "btn-open-planning", BLEU))
     return session, html.Div(btns, style={"display": "flex", "gap": "8px"})
@@ -813,6 +845,10 @@ def afficher_detail(n_clicks, session):
         return html.P("Planning introuvable."), None, {"display": "none"}, {}, {}
 
     role = session.get("role", "") if session else ""
+
+    # ── Un élève ne voit jamais les boutons d'action ──
+    if role == "eleve":
+        return _render_detail_content(detail), planning_id, {"display": "none"}, {}, {}
 
     btn_style_base = {
         "border": "none", "borderRadius": "8px", "padding": "8px 16px",
@@ -1018,7 +1054,6 @@ def valider_rejeter_planning(v, r, m, planning_id, commentaire):
             classe_n      = classes[0] if classes else "-"
             semaine       = planning.semaine.strftime("%d/%m/%Y") if planning.semaine else "-"
 
-            # Construire la liste des séances AVANT db.close()
             seances_list = _get_seances_list(planning)
 
             for email_rc, nom_rc in destinataires:
