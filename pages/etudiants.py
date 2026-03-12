@@ -35,62 +35,74 @@ def get_classes():
     finally:
         db.close()
 
+
 def get_etudiants(classe_id=None, search=None, classe_ids_scope=None):
     """
     classe_id         : filtre dropdown sélectionné par l'utilisateur
     classe_ids_scope  : périmètre du rôle (None = admin, [...] = restreint)
-    Si classe_id est fourni, il prime sur le scope (mais doit être dans le scope).
-    Si classe_id est None et scope est une liste, on filtre sur le scope entier.
     """
     db = SessionLocal()
     try:
         q = db.query(Etudiant).join(User)
-        if classe_id:
-            # Classe sélectionnée explicitement — vérifier qu'elle est dans le scope
-            if classe_ids_scope is not None and classe_id not in classe_ids_scope:
-                return []   # tentative d'accès hors périmètre
-            q = q.filter(Etudiant.classe_id == classe_id)
-        elif classe_ids_scope is not None:
-            # Pas de filtre explicite → restreindre au périmètre du rôle
+
+        # Appliquer le scope du rôle
+        if classe_ids_scope is not None:
             if not classe_ids_scope:
                 return []
             q = q.filter(Etudiant.classe_id.in_(classe_ids_scope))
-        # else: admin sans filtre → tout voir
+
+        # Appliquer le filtre classe dropdown
+        if classe_id:
+            q = q.filter(Etudiant.classe_id == classe_id)
+
+        # Appliquer la recherche
         if search:
+            s = f"%{search.lower()}%"
             q = q.filter(
-                (User.nom.ilike(f"%{search}%")) |
-                (User.prenom.ilike(f"%{search}%")) |
-                (Etudiant.matricule.ilike(f"%{search}%"))
+                func.lower(User.nom).like(s)
+                | func.lower(User.prenom).like(s)
+                | func.lower(Etudiant.matricule).like(s)
             )
-        etudiants = q.order_by(User.nom, User.prenom).all()
+
+        etudiants = q.order_by(User.nom).all()
         result = []
         for e in etudiants:
-            # Taux assiduite
-            total_seances = db.query(Presence).filter(Presence.etudiant_id == e.id).count()
-            presences     = db.query(Presence).filter(
-                Presence.etudiant_id == e.id, Presence.present == True
-            ).count()
-            taux = round((presences / total_seances) * 100) if total_seances > 0 else 100
+            # Taux assiduité
+            seances_ids = [
+                s.id for s in db.query(Seance).join(Module)
+                .filter(Module.classe_id == e.classe_id).all()
+            ]
+            total_seances = len(seances_ids)
+            if total_seances > 0:
+                presences = db.query(Presence).filter(
+                    Presence.etudiant_id == e.id,
+                    Presence.seance_id.in_(seances_ids),
+                    Presence.present == True
+                ).count()
+                taux = round(presences / total_seances * 100, 1)
+            else:
+                taux = 100.0
 
-            # Moyenne generale
+            # Moyenne générale
             notes = db.query(Note).filter(Note.etudiant_id == e.id).all()
-            moy   = round(sum(n.note for n in notes) / len(notes), 2) if notes else None
+            moy = round(sum(n.note for n in notes) / len(notes), 2) if notes else None
 
             result.append({
-                "id"           : e.id,
-                "matricule"    : e.matricule,
-                "nom"          : e.user.nom if e.user else "",
-                "prenom"       : e.user.prenom if e.user else "",
-                "email"        : e.user.email if e.user else "",
-                "classe"       : e.classe.nom if e.classe else "-",
-                "classe_id"    : e.classe_id,
+                "id"            : e.id,
+                "matricule"     : e.matricule,
+                "nom"           : e.user.nom if e.user else "",
+                "prenom"        : e.user.prenom if e.user else "",
+                "email"         : e.user.email if e.user else "",
+                "classe"        : e.classe.nom if e.classe else "-",
+                "classe_id"     : e.classe_id,
                 "taux_assiduite": taux,
-                "moyenne"      : moy,
-                "nb_absences"  : total_seances - presences,
+                "moyenne"       : moy,
+                "nb_absences"   : total_seances - (presences if total_seances > 0 else 0),
             })
         return result
     finally:
         db.close()
+
 
 def get_etudiant_detail(etudiant_id):
     db = SessionLocal()
@@ -105,7 +117,7 @@ def get_etudiant_detail(etudiant_id):
         for m in modules:
             notes_m = db.query(Note).filter(
                 Note.etudiant_id == e.id,
-                Note.module_id == m.id
+                Note.module_id   == m.id
             ).order_by(Note.numero).all()
             note1 = next((n.note for n in notes_m if n.numero == 1), None)
             note2 = next((n.note for n in notes_m if n.numero == 2), None)
@@ -116,34 +128,36 @@ def get_etudiant_detail(etudiant_id):
             else:
                 moy_mod = None
             notes_data.append({
-                "module"    : m.libelle,
-                "code"      : m.code,
-                "ue"        : m.ue.libelle if m.ue else "-",
-                "coef"      : m.coefficient,
-                "note1"     : note1,
-                "note2"     : note2,
-                "moyenne"   : moy_mod,
-                "module_id" : m.id,
+                "module"   : m.libelle,
+                "code"     : m.code,
+                "ue"       : m.ue.libelle if m.ue else "-",
+                "coef"     : m.coefficient,
+                "note1"    : note1,
+                "note2"    : note2,
+                "moyenne"  : moy_mod,
+                "module_id": m.id,
             })
 
         # Absences
         absences = db.query(Presence).filter(
-            Presence.etudiant_id == e.id, Presence.present == False
+            Presence.etudiant_id == e.id,
+            Presence.present     == False
         ).all()
 
         return {
-            "id"         : e.id,
-            "matricule"  : e.matricule,
-            "nom"        : e.user.nom if e.user else "",
-            "prenom"     : e.user.prenom if e.user else "",
-            "email"      : e.user.email if e.user else "",
-            "classe"     : e.classe.nom if e.classe else "-",
-            "naissance"  : e.date_naissance.strftime("%d/%m/%Y") if e.date_naissance else "-",
-            "notes"      : notes_data,
-            "absences"   : len(absences),
+            "id"       : e.id,
+            "matricule": e.matricule,
+            "nom"      : e.user.nom    if e.user else "",
+            "prenom"   : e.user.prenom if e.user else "",
+            "email"    : e.user.email  if e.user else "",
+            "classe"   : e.classe.nom  if e.classe else "-",
+            "naissance": e.date_naissance.strftime("%d/%m/%Y") if e.date_naissance else "-",
+            "notes"    : notes_data,
+            "absences" : len(absences),
         }
     finally:
         db.close()
+
 
 def get_modules_for_template(classe_id):
     db = SessionLocal()
@@ -151,6 +165,7 @@ def get_modules_for_template(classe_id):
         return db.query(Module).filter(Module.classe_id == classe_id).all()
     finally:
         db.close()
+
 
 def generate_notes_template(classe_id) -> bytes:
     """Genere un template Excel pour la saisie des notes."""
@@ -166,7 +181,7 @@ def generate_notes_template(classe_id) -> bytes:
             row = {
                 "ID_Etudiant": e.id,
                 "Matricule"  : e.matricule,
-                "Nom"        : e.user.nom if e.user else "",
+                "Nom"        : e.user.nom    if e.user else "",
                 "Prenom"     : e.user.prenom if e.user else "",
             }
             for m in modules:
@@ -181,8 +196,8 @@ def generate_notes_template(classe_id) -> bytes:
             wb = writer.book
             from openpyxl.styles import PatternFill, Font, Alignment
             ws = writer.sheets["Notes"]
-            fill   = PatternFill("solid", fgColor="003580")
-            font   = Font(color="FFFFFF", bold=True)
+            fill = PatternFill("solid", fgColor="003580")
+            font = Font(color="FFFFFF", bold=True)
             for cell in ws[1]:
                 cell.fill      = fill
                 cell.font      = font
@@ -190,12 +205,14 @@ def generate_notes_template(classe_id) -> bytes:
             for col in ws.columns:
                 ws.column_dimensions[col[0].column_letter].width = 18
 
-            # Feuille info modules
             df_mod = pd.DataFrame([
-                {"Code": m.code, "Module": m.libelle,
-                 "UE": m.ue.libelle if m.ue else "-",
-                 "Coefficient": m.coefficient,
-                 "Volume_h": m.volume_horaire}
+                {
+                    "Code"       : m.code,
+                    "Module"     : m.libelle,
+                    "UE"         : m.ue.libelle if m.ue else "-",
+                    "Coefficient": m.coefficient,
+                    "Volume_h"   : m.volume_horaire,
+                }
                 for m in modules
             ])
             df_mod.to_excel(writer, sheet_name="Info_Modules", index=False)
@@ -205,18 +222,16 @@ def generate_notes_template(classe_id) -> bytes:
     finally:
         db.close()
 
+
 def import_notes_from_excel(contents: str):
     """Importe les notes depuis un fichier Excel."""
+    content_type, content_string = contents.split(",")
+    decoded = base64.b64decode(content_string)
+    df = pd.read_excel(io.BytesIO(decoded), sheet_name="Notes")
+
+    db  = SessionLocal()
     nb  = 0
     err = []
-    try:
-        content_type, content_string = contents.split(",")
-        decoded = base64.b64decode(content_string)
-        df = pd.read_excel(io.BytesIO(decoded), sheet_name="Notes")
-    except Exception as e:
-        return 0, [f"Erreur lecture fichier : {str(e)}"]
-
-    db = SessionLocal()
     try:
         for _, row in df.iterrows():
             etudiant_id = row.get("ID_Etudiant")
@@ -227,12 +242,13 @@ def import_notes_from_excel(contents: str):
             for col in df.columns:
                 if "_Note" not in col:
                     continue
-                parts  = col.rsplit("_Note", 1)
+                parts = col.rsplit("_Note", 1)
                 if len(parts) != 2:
                     continue
-                code   = parts[0]
-                numero = int(parts[1]) if parts[1].isdigit() else None
-                if numero not in (1, 2):
+                code_module, numero_str = parts
+                try:
+                    numero = int(numero_str)
+                except ValueError:
                     continue
 
                 val = row.get(col)
@@ -240,41 +256,38 @@ def import_notes_from_excel(contents: str):
                     continue
                 try:
                     note_val = float(val)
-                    if not (0 <= note_val <= 20):
-                        err.append(f"Note hors range (0-20) : {col} etudiant {etudiant_id}")
-                        continue
                 except (ValueError, TypeError):
-                    err.append(f"Valeur invalide : {col} etudiant {etudiant_id}")
+                    err.append(f"Valeur invalide pour {col} etudiant {etudiant_id}")
                     continue
 
-                module = db.query(Module).filter(Module.code == code).first()
+                module = db.query(Module).filter(Module.code == code_module).first()
                 if not module:
-                    err.append(f"Module '{code}' introuvable.")
+                    err.append(f"Module '{code_module}' introuvable.")
                     continue
-                from models import TypeEvalEnum
-                type_eval = TypeEvalEnum.devoir if numero == 1 else TypeEvalEnum.examen
-                existing  = db.query(Note).filter(
+
+                existing = db.query(Note).filter(
                     Note.etudiant_id == etudiant_id,
                     Note.module_id   == module.id,
                     Note.numero      == numero
                 ).first()
+
                 if existing:
                     existing.note = note_val
                 else:
                     db.add(Note(
-                        etudiant_id=etudiant_id,
-                        module_id=module.id,
-                        note=note_val,
-                        type_eval=type_eval,
-                        numero=numero
+                        etudiant_id = etudiant_id,
+                        module_id   = module.id,
+                        note        = note_val,
+                        numero      = numero,
+                        type_eval   = "Devoir" if numero == 1 else "Examen",
                     ))
                 nb += 1
+
         db.commit()
         return nb, err
     except Exception as e:
         db.rollback()
-        err.append(f"Erreur globale : {str(e)}")
-        return nb, err
+        raise e
     finally:
         db.close()
 
@@ -286,7 +299,8 @@ def import_notes_from_excel(contents: str):
 def label_style():
     return {
         "fontWeight": "600", "fontSize": "0.82rem", "color": "#374151",
-        "marginBottom": "6px", "display": "block", "fontFamily": "'Inter', sans-serif"
+        "marginBottom": "6px", "display": "block",
+        "fontFamily": "'Inter', sans-serif"
     }
 
 def input_style():
@@ -328,8 +342,10 @@ def taux_badge(taux):
 
 def moy_badge(moy):
     if moy is None:
-        return html.Span("-", style={"color": "#9ca3af", "fontSize": "0.82rem",
-                                      "fontFamily": "'Inter', sans-serif"})
+        return html.Span("-", style={
+            "color": "#9ca3af", "fontSize": "0.82rem",
+            "fontFamily": "'Inter', sans-serif"
+        })
     color = VERT if moy >= 12 else OR if moy >= 10 else "#ef4444"
     return html.Span(f"{moy}/20", style={
         "background": f"{color}15", "color": color,
@@ -380,20 +396,27 @@ layout = html.Div([
             "alignItems": "center", "gap": "12px", "flexWrap": "wrap"
         }, children=[
             html.Div(style={"flex": "1", "minWidth": "160px"}, children=[
-                dcc.Dropdown(id="etudiants-filtre-classe",
-                             placeholder="Filtrer par classe...",
-                             style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"})
+                dcc.Dropdown(
+                    id="etudiants-filtre-classe",
+                    placeholder="Filtrer par classe...",
+                    style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"}
+                )
             ]),
             html.Div(style={"flex": "2", "minWidth": "200px"}, children=[
-                dbc.Input(id="etudiants-search", placeholder="Rechercher nom, prenom ou matricule...",
-                          style=input_style())
+                dbc.Input(
+                    id="etudiants-search",
+                    placeholder="Rechercher nom, prenom ou matricule...",
+                    style=input_style()
+                )
             ]),
             # Notes workflow
             html.Div(style={"display": "flex", "gap": "8px", "alignItems": "center"}, children=[
                 html.Div(style={"minWidth": "180px"}, children=[
-                    dcc.Dropdown(id="notes-classe-select",
-                                 placeholder="Classe pour notes...",
-                                 style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"})
+                    dcc.Dropdown(
+                        id="notes-classe-select",
+                        placeholder="Classe pour notes...",
+                        style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"}
+                    )
                 ]),
                 html.Button(
                     [html.Span("download", className="material-symbols-outlined",
@@ -494,20 +517,36 @@ layout = html.Div([
         dbc.ModalHeader(dbc.ModalTitle("Ajouter un etudiant")),
         dbc.ModalBody([
             dbc.Row([
-                dbc.Col(field("Nom *", dbc.Input(id="etud-nom", placeholder="ex: DIOP", style=input_style())), md=6),
-                dbc.Col(field("Prenom *", dbc.Input(id="etud-prenom", placeholder="ex: Amadou", style=input_style())), md=6),
+                dbc.Col(field("Nom *", dbc.Input(
+                    id="etud-nom", placeholder="ex: DIOP", style=input_style()
+                )), md=6),
+                dbc.Col(field("Prenom *", dbc.Input(
+                    id="etud-prenom", placeholder="ex: Amadou", style=input_style()
+                )), md=6),
             ]),
-            field("Email *", dbc.Input(id="etud-email", type="email",
-                                        placeholder="ex: amadou.diop@ensae.sn", style=input_style())),
-            field("Matricule *", dbc.Input(id="etud-matricule", placeholder="ex: AS2024001", style=input_style())),
-            field("Date de naissance", dbc.Input(id="etud-naissance", type="date", style=input_style())),
-            field("Classe *", dcc.Dropdown(id="etud-classe",
-                                            placeholder="Selectionner une classe",
-                                            style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"})),
-            field("Filiere d'origine", dbc.Input(id="etud-filiere-origine",
-                                                   placeholder="ex: ISE Math", style=input_style())),
-            field("Mot de passe provisoire *", dbc.Input(id="etud-password", type="password",
-                                                          placeholder="Minimum 6 caracteres", style=input_style())),
+            field("Email *", dbc.Input(
+                id="etud-email", type="email",
+                placeholder="ex: amadou.diop@ensae.sn", style=input_style()
+            )),
+            field("Matricule *", dbc.Input(
+                id="etud-matricule", placeholder="ex: AS2024001", style=input_style()
+            )),
+            field("Date de naissance", dbc.Input(
+                id="etud-naissance", type="date", style=input_style()
+            )),
+            field("Classe *", dcc.Dropdown(
+                id="etud-classe",
+                placeholder="Selectionner une classe",
+                style={"fontFamily": "'Inter', sans-serif", "fontSize": "0.875rem"}
+            )),
+            field("Filiere d'origine", dbc.Input(
+                id="etud-filiere-origine",
+                placeholder="ex: ISE Math", style=input_style()
+            )),
+            field("Mot de passe provisoire *", dbc.Input(
+                id="etud-password", type="password",
+                placeholder="Minimum 6 caracteres", style=input_style()
+            )),
             html.Div(id="etud-feedback", style={"color": "#ef4444", "fontSize": "0.8rem"})
         ]),
         dbc.ModalFooter([
@@ -544,21 +583,27 @@ def masquer_filtres_eleve(session):
 def adapter_layout_eleve(session):
     role = (session or {}).get("role", "")
     if role == "eleve":
-        # Masquer la liste, fiche en pleine largeur
         return {"display": "none"}, 0, 12
     return {}, 5, 7
 
 
 # ── Charger automatiquement la fiche de l'élève connecté ────
+# CORRECTIF : suppress_initial_call retiré pour que la fiche
+# se charge dès l'arrivée sur la page, même si la session
+# était déjà présente dans le Store.
 @callback(
-    Output("etudiant-fiche",   "children", allow_duplicate=True),
-    Output("eleve-auto-load",  "data"),
-    Input("session-store",     "data"),
-    prevent_initial_call=True
+    Output("etudiant-fiche",  "children", allow_duplicate=True),
+    Output("eleve-auto-load", "data"),
+    Input("session-store",    "data"),
+    # prevent_initial_call=True  ← SUPPRIMÉ : c'était la cause du bug
 )
 def charger_fiche_eleve(session):
-    role    = (session or {}).get("role", "")
-    user_id = (session or {}).get("user_id")
+    if not session:
+        return dash.no_update, dash.no_update
+
+    role    = session.get("role", "")
+    user_id = session.get("user_id")
+
     if role != "eleve":
         return dash.no_update, dash.no_update
 
@@ -566,10 +611,13 @@ def charger_fiche_eleve(session):
     try:
         etudiant = db.query(Etudiant).filter(Etudiant.user_id == user_id).first()
         if not etudiant:
-            return html.P("Aucun profil etudiant associe a ce compte.", style={
-                "color": "#9ca3af", "fontFamily": "'Inter', sans-serif",
-                "fontSize": "0.875rem", "textAlign": "center", "padding": "40px"
-            }), 1
+            return html.P(
+                "Aucun profil etudiant associe a ce compte.",
+                style={
+                    "color": "#9ca3af", "fontFamily": "'Inter', sans-serif",
+                    "fontSize": "0.875rem", "textAlign": "center", "padding": "40px"
+                }
+            ), 1
     finally:
         db.close()
 
@@ -606,7 +654,7 @@ def afficher_etudiants(classe_id, search, _, session):
     role    = (session or {}).get("role", "")
     user_id = (session or {}).get("user_id")
 
-    # Pour un élève : pas de liste, la fiche est chargée directement ailleurs
+    # Pour un élève : pas de liste, la fiche est chargée directement par charger_fiche_eleve
     if role == "eleve":
         return html.Div(), "0"
 
@@ -622,53 +670,68 @@ def afficher_etudiants(classe_id, search, _, session):
     items = [
         html.Div(
             id={"type": "etudiant-item", "index": e["id"]},
+            n_clicks=0,
             style={
-                "display": "grid",
-                "gridTemplateColumns": "auto 1fr auto",
-                "alignItems": "center",
-                "gap": "12px",
-                "padding": "10px 14px",
-                "borderRadius": "8px",
-                "border": "1px solid #e5e7eb",
-                "marginBottom": "6px",
-                "background": "#fafafa",
-                "cursor": "pointer",
-                "transition": "border-color 0.2s"
+                "display"              : "grid",
+                "gridTemplateColumns"  : "auto 1fr auto",
+                "alignItems"           : "center",
+                "gap"                  : "12px",
+                "padding"              : "10px 14px",
+                "borderRadius"         : "8px",
+                "border"               : "1px solid #e5e7eb",
+                "marginBottom"         : "6px",
+                "background"           : "#fafafa",
+                "cursor"               : "pointer",
+                "transition"           : "border-color 0.2s"
             },
             children=[
                 html.Div(
                     f"{e['prenom'][0]}{e['nom'][0]}".upper() if e['prenom'] and e['nom'] else "?",
                     style={
-                        "width": "36px", "height": "36px",
-                        "borderRadius": "50%",
-                        "background": f"{BLEU}15",
-                        "color": BLEU, "fontWeight": "700",
-                        "fontSize": "0.82rem", "fontFamily": "'Montserrat', sans-serif",
-                        "display": "flex", "alignItems": "center", "justifyContent": "center",
-                        "flexShrink": "0"
+                        "width"         : "36px",
+                        "height"        : "36px",
+                        "borderRadius"  : "50%",
+                        "background"    : f"{BLEU}15",
+                        "color"         : BLEU,
+                        "fontWeight"    : "700",
+                        "fontSize"      : "0.82rem",
+                        "fontFamily"    : "'Montserrat', sans-serif",
+                        "display"       : "flex",
+                        "alignItems"    : "center",
+                        "justifyContent": "center",
+                        "flexShrink"    : "0"
                     }
                 ),
                 html.Div([
                     html.Span(f"{e['prenom']} {e['nom']}", style={
-                        "fontWeight": "600", "color": "#111827",
-                        "fontSize": "0.875rem", "fontFamily": "'Inter', sans-serif"
+                        "fontWeight" : "600",
+                        "color"      : "#111827",
+                        "fontSize"   : "0.875rem",
+                        "fontFamily" : "'Inter', sans-serif"
                     }),
                     html.Div([
                         html.Span(e["matricule"], style={
-                            "color": "#9ca3af", "fontSize": "0.7rem",
-                            "fontFamily": "'Inter', sans-serif", "marginRight": "8px"
+                            "color"      : "#9ca3af",
+                            "fontSize"   : "0.7rem",
+                            "fontFamily" : "'Inter', sans-serif",
+                            "marginRight": "8px"
                         }),
                         html.Span(e["classe"], style={
-                            "color": BLEU, "fontSize": "0.7rem",
-                            "fontFamily": "'Inter', sans-serif", "fontWeight": "500"
+                            "color"      : BLEU,
+                            "fontSize"   : "0.7rem",
+                            "fontFamily" : "'Inter', sans-serif",
+                            "fontWeight" : "500"
                         }),
                     ])
                 ]),
-                html.Div(style={"display": "flex", "flexDirection": "column",
-                                "gap": "4px", "alignItems": "flex-end"}, children=[
-                    moy_badge(e["moyenne"]),
-                    taux_badge(e["taux_assiduite"])
-                ])
+                html.Div(
+                    style={"display": "flex", "flexDirection": "column",
+                           "gap": "4px", "alignItems": "flex-end"},
+                    children=[
+                        moy_badge(e["moyenne"]),
+                        taux_badge(e["taux_assiduite"])
+                    ]
+                )
             ]
         )
         for e in etudiants
@@ -677,7 +740,7 @@ def afficher_etudiants(classe_id, search, _, session):
 
 
 @callback(
-    Output("etudiant-fiche", "children"),
+    Output("etudiant-fiche", "children", allow_duplicate=True),
     Input({"type": "etudiant-item", "index": dash.ALL}, "n_clicks"),
     prevent_initial_call=True
 )
@@ -707,58 +770,82 @@ def _build_fiche(etudiant_id):
     fiche = html.Div([
         # En-tete identite
         html.Div(style={
-            "display": "flex", "alignItems": "center", "gap": "14px",
-            "marginBottom": "18px", "padding": "14px",
-            "background": f"{BLEU}08", "borderRadius": "10px",
-            "border": f"1px solid {BLEU}20"
+            "display"     : "flex",
+            "alignItems"  : "center",
+            "gap"         : "14px",
+            "marginBottom": "18px",
+            "padding"     : "14px",
+            "background"  : f"{BLEU}08",
+            "borderRadius": "10px",
+            "border"      : f"1px solid {BLEU}20"
         }, children=[
             html.Div(
                 f"{detail['prenom'][0]}{detail['nom'][0]}".upper(),
                 style={
-                    "width": "48px", "height": "48px", "borderRadius": "50%",
-                    "background": BLEU, "color": "#fff", "fontWeight": "800",
-                    "fontSize": "1rem", "fontFamily": "'Montserrat', sans-serif",
-                    "display": "flex", "alignItems": "center", "justifyContent": "center",
-                    "flexShrink": "0"
+                    "width"         : "48px",
+                    "height"        : "48px",
+                    "borderRadius"  : "50%",
+                    "background"    : BLEU,
+                    "color"         : "#fff",
+                    "fontWeight"    : "800",
+                    "fontSize"      : "1rem",
+                    "fontFamily"    : "'Montserrat', sans-serif",
+                    "display"       : "flex",
+                    "alignItems"    : "center",
+                    "justifyContent": "center",
+                    "flexShrink"    : "0"
                 }
             ),
             html.Div([
                 html.Div(f"{detail['prenom']} {detail['nom']}", style={
-                    "fontWeight": "700", "fontSize": "1rem",
-                    "color": "#111827", "fontFamily": "'Montserrat', sans-serif"
+                    "fontWeight": "700",
+                    "fontSize"  : "1rem",
+                    "color"     : "#111827",
+                    "fontFamily": "'Montserrat', sans-serif"
                 }),
-                html.Div(style={"display": "flex", "gap": "10px", "marginTop": "4px",
-                                "flexWrap": "wrap"}, children=[
-                    html.Span(detail["matricule"], style={
-                        "color": "#6b7280", "fontSize": "0.78rem",
-                        "fontFamily": "'Inter', sans-serif"
-                    }),
-                    html.Span(detail["classe"], style={
-                        "color": BLEU, "fontSize": "0.78rem",
-                        "fontFamily": "'Inter', sans-serif", "fontWeight": "600"
-                    }),
-                    html.Span(f"Né(e) le {detail['naissance']}", style={
-                        "color": "#9ca3af", "fontSize": "0.75rem",
-                        "fontFamily": "'Inter', sans-serif"
-                    }),
-                ])
+                html.Div(
+                    style={"display": "flex", "gap": "10px", "marginTop": "4px", "flexWrap": "wrap"},
+                    children=[
+                        html.Span(detail["matricule"], style={
+                            "color"     : "#6b7280",
+                            "fontSize"  : "0.78rem",
+                            "fontFamily": "'Inter', sans-serif"
+                        }),
+                        html.Span(detail["classe"], style={
+                            "color"     : BLEU,
+                            "fontSize"  : "0.78rem",
+                            "fontFamily": "'Inter', sans-serif",
+                            "fontWeight": "600"
+                        }),
+                        html.Span(f"Né(e) le {detail['naissance']}", style={
+                            "color"     : "#9ca3af",
+                            "fontSize"  : "0.75rem",
+                            "fontFamily": "'Inter', sans-serif"
+                        }),
+                    ]
+                )
             ])
         ]),
 
-        # KPIs assiduite / absences
+        # KPIs absences
         html.Div(style={"display": "flex", "gap": "10px", "marginBottom": "18px"}, children=[
             html.Div(style={
-                "flex": "1", "background": "#f0fdf4", "borderRadius": "8px",
-                "padding": "10px", "textAlign": "center",
-                "border": "1px solid #bbf7d0"
+                "flex"        : "1",
+                "background"  : "#f0fdf4",
+                "borderRadius": "8px",
+                "padding"     : "10px",
+                "textAlign"   : "center",
+                "border"      : "1px solid #bbf7d0"
             }, children=[
                 html.Div(f"{detail['absences']}", style={
-                    "fontWeight": "800", "fontSize": "1.4rem",
-                    "color": "#ef4444" if detail["absences"] > 5 else VERT,
+                    "fontWeight": "800",
+                    "fontSize"  : "1.4rem",
+                    "color"     : "#ef4444" if detail["absences"] > 5 else VERT,
                     "fontFamily": "'Montserrat', sans-serif"
                 }),
                 html.Div("Absences", style={
-                    "fontSize": "0.72rem", "color": "#6b7280",
+                    "fontSize"  : "0.72rem",
+                    "color"     : "#6b7280",
                     "fontFamily": "'Inter', sans-serif"
                 })
             ]),
@@ -766,78 +853,105 @@ def _build_fiche(etudiant_id):
 
         # Notes par UE
         html.H6("Notes par module", style={
-            "fontFamily": "'Montserrat', sans-serif",
-            "fontWeight": "700", "color": BLEU,
-            "fontSize": "0.875rem", "marginBottom": "10px"
+            "fontFamily"  : "'Montserrat', sans-serif",
+            "fontWeight"  : "700",
+            "color"       : BLEU,
+            "fontSize"    : "0.875rem",
+            "marginBottom": "10px"
         }),
 
         html.Div([
             html.Div(style={"marginBottom": "14px"}, children=[
                 html.Div(ue_name, style={
-                    "fontWeight": "700", "fontSize": "0.78rem",
-                    "color": VERT, "fontFamily": "'Montserrat', sans-serif",
-                    "marginBottom": "6px", "textTransform": "uppercase",
-                    "letterSpacing": "0.05em"
+                    "fontWeight"     : "700",
+                    "fontSize"       : "0.78rem",
+                    "color"          : VERT,
+                    "fontFamily"     : "'Montserrat', sans-serif",
+                    "marginBottom"   : "6px",
+                    "textTransform"  : "uppercase",
+                    "letterSpacing"  : "0.05em"
                 }),
+                # En-tête colonnes
                 html.Div(style={
-                    "display": "grid",
+                    "display"            : "grid",
                     "gridTemplateColumns": "1fr 80px 80px 80px",
-                    "gap": "4px",
-                    "padding": "4px 8px",
-                    "background": "#f9fafb",
-                    "borderRadius": "6px",
-                    "marginBottom": "4px",
-                    "fontSize": "0.7rem", "color": "#9ca3af",
-                    "fontFamily": "'Inter', sans-serif", "fontWeight": "600"
+                    "gap"                : "4px",
+                    "padding"            : "4px 8px",
+                    "background"         : "#f9fafb",
+                    "borderRadius"       : "6px",
+                    "marginBottom"       : "4px",
+                    "fontSize"           : "0.7rem",
+                    "color"              : "#9ca3af",
+                    "fontFamily"         : "'Inter', sans-serif",
+                    "fontWeight"         : "600"
                 }, children=[
                     html.Span("Module"),
-                    html.Span("Devoir", style={"textAlign": "center"}),
-                    html.Span("Examen", style={"textAlign": "center"}),
-                    html.Span("Moy.", style={"textAlign": "center"}),
+                    html.Span("Devoir",  style={"textAlign": "center"}),
+                    html.Span("Examen",  style={"textAlign": "center"}),
+                    html.Span("Moy.",    style={"textAlign": "center"}),
                 ]),
-                *[
+                # Lignes modules
+                html.Div([
                     html.Div(style={
-                        "display": "grid",
+                        "display"            : "grid",
                         "gridTemplateColumns": "1fr 80px 80px 80px",
-                        "gap": "4px",
-                        "padding": "6px 8px",
-                        "borderRadius": "6px",
-                        "border": "1px solid #f3f4f6",
-                        "marginBottom": "3px",
-                        "alignItems": "center"
+                        "gap"                : "4px",
+                        "padding"            : "6px 8px",
+                        "borderRadius"       : "6px",
+                        "marginBottom"       : "2px",
+                        "background"         : "#ffffff",
+                        "border"             : "1px solid #f3f4f6"
                     }, children=[
-                        html.Span(n["module"], style={
-                            "fontSize": "0.82rem", "color": "#374151",
-                            "fontFamily": "'Inter', sans-serif", "fontWeight": "500"
+                        html.Span(f"{n['code']} — {n['module']}", style={
+                            "fontSize"  : "0.78rem",
+                            "color"     : "#374151",
+                            "fontFamily": "'Inter', sans-serif",
+                            "overflow"  : "hidden",
+                            "textOverflow": "ellipsis",
+                            "whiteSpace": "nowrap"
                         }),
                         html.Span(
-                            f"{n['note1']}/20" if n['note1'] is not None else "-",
-                            style={"fontSize": "0.78rem", "color": "#6b7280",
-                                   "fontFamily": "'Inter', sans-serif", "textAlign": "center"}
-                        ),
-                        html.Span(
-                            f"{n['note2']}/20" if n['note2'] is not None else "-",
-                            style={"fontSize": "0.78rem", "color": "#6b7280",
-                                   "fontFamily": "'Inter', sans-serif", "textAlign": "center"}
-                        ),
-                        html.Span(
-                            f"{n['moyenne']}/20" if n['moyenne'] is not None else "-",
+                            f"{n['note1']}" if n['note1'] is not None else "—",
                             style={
-                                "fontSize": "0.82rem", "fontWeight": "700", "textAlign": "center",
-                                "color": VERT if n['moyenne'] and n['moyenne'] >= 10 else "#ef4444",
-                                "fontFamily": "'Montserrat', sans-serif"
+                                "textAlign" : "center",
+                                "fontSize"  : "0.78rem",
+                                "color"     : "#374151",
+                                "fontFamily": "'Inter', sans-serif"
                             }
-                        )
+                        ),
+                        html.Span(
+                            f"{n['note2']}" if n['note2'] is not None else "—",
+                            style={
+                                "textAlign" : "center",
+                                "fontSize"  : "0.78rem",
+                                "color"     : "#374151",
+                                "fontFamily": "'Inter', sans-serif"
+                            }
+                        ),
+                        html.Span(
+                            f"{n['moyenne']}" if n['moyenne'] is not None else "—",
+                            style={
+                                "textAlign" : "center",
+                                "fontSize"  : "0.78rem",
+                                "fontWeight": "700",
+                                "color"     : VERT if (n['moyenne'] or 0) >= 10 else "#ef4444",
+                                "fontFamily": "'Inter', sans-serif"
+                            }
+                        ),
                     ])
-                    for n in ue_mods
-                ],
+                    for n in ue_notes
+                ])
             ])
-            for ue_name, ue_mods in ues.items()
-        ]) if notes else html.P("Aucune note enregistree.", style={
-            "color": "#9ca3af", "fontFamily": "'Inter', sans-serif",
-            "fontSize": "0.875rem", "textAlign": "center", "padding": "20px"
+            for ue_name, ue_notes in ues.items()
+        ]) if ues else html.P("Aucune note enregistree.", style={
+            "color"     : "#9ca3af",
+            "fontFamily": "'Inter', sans-serif",
+            "fontSize"  : "0.875rem",
+            "textAlign" : "center",
+            "padding"   : "20px"
         })
     ])
+
     return fiche
 
 
@@ -854,18 +968,18 @@ def toggle_modal(o, c, s):
 
 
 @callback(
-    Output("etud-feedback",    "children"),
-    Output("etudiants-refresh","data"),
-    Output("modal-etudiant",   "is_open", allow_duplicate=True),
-    Input("btn-save-etudiant", "n_clicks"),
-    State("etud-nom",           "value"),
-    State("etud-prenom",        "value"),
-    State("etud-email",         "value"),
-    State("etud-matricule",     "value"),
-    State("etud-naissance",     "value"),
-    State("etud-classe",        "value"),
+    Output("etud-feedback",     "children"),
+    Output("etudiants-refresh", "data"),
+    Output("modal-etudiant",    "is_open", allow_duplicate=True),
+    Input("btn-save-etudiant",  "n_clicks"),
+    State("etud-nom",            "value"),
+    State("etud-prenom",         "value"),
+    State("etud-email",          "value"),
+    State("etud-matricule",      "value"),
+    State("etud-naissance",      "value"),
+    State("etud-classe",         "value"),
     State("etud-filiere-origine","value"),
-    State("etud-password",      "value"),
+    State("etud-password",       "value"),
     prevent_initial_call=True
 )
 def save_etudiant(n, nom, prenom, email, matricule, naissance, classe_id, filiere_origine, password):
@@ -880,18 +994,23 @@ def save_etudiant(n, nom, prenom, email, matricule, naissance, classe_id, filier
         if db.query(Etudiant).filter(Etudiant.matricule == matricule).first():
             return f"Matricule '{matricule}' deja utilise.", None, True
         user = User(
-            nom=nom.upper(), prenom=prenom,
-            email=email, password_hash=hash_password(password),
-            role=RoleEnum.eleve, is_active=True
+            nom          = nom.upper(),
+            prenom       = prenom,
+            email        = email,
+            password_hash= hash_password(password),
+            role         = RoleEnum.eleve,
+            is_active    = True
         )
         db.add(user)
         db.flush()
         date_naissance = datetime.strptime(naissance, "%Y-%m-%d").date() if naissance else None
         etudiant = Etudiant(
-            user_id=user.id, matricule=matricule,
-            date_naissance=date_naissance, classe_id=classe_id,
-            filiere_origine=filiere_origine or "",
-            annee_scolaire="2024-2025"
+            user_id        = user.id,
+            matricule      = matricule,
+            date_naissance = date_naissance,
+            classe_id      = classe_id,
+            filiere_origine= filiere_origine or "",
+            annee_scolaire = "2024-2025"
         )
         db.add(etudiant)
         db.commit()
@@ -919,9 +1038,9 @@ def download_template(n, classe_id):
 
 # -- Import notes --
 @callback(
-    Output("notes-feedback",   "children"),
-    Output("etudiants-refresh","data", allow_duplicate=True),
-    Input("notes-upload",      "contents"),
+    Output("notes-feedback",    "children"),
+    Output("etudiants-refresh", "data", allow_duplicate=True),
+    Input("notes-upload",       "contents"),
     prevent_initial_call=True
 )
 def import_notes(contents):
@@ -944,5 +1063,7 @@ def import_notes(contents):
             ))
         return html.Div(messages), True
     except Exception as e:
-        return dbc.Alert(f"Erreur : {str(e)}", color="danger", dismissable=True,
-                         style={"fontFamily": "'Inter', sans-serif"}), None
+        return dbc.Alert(
+            f"Erreur : {str(e)}", color="danger", dismissable=True,
+            style={"fontFamily": "'Inter', sans-serif"}
+        ), None
