@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///data/sga_ensae.db")
-
+DB_PATH = DATABASE_URL.replace("sqlite:///", "") if DATABASE_URL.startswith("sqlite") else None
 # Arguments spécifiques à SQLite uniquement
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 

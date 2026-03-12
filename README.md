@@ -1,127 +1,146 @@
-# SGA ENSAE — Système de Gestion Académique
+<div align="center">
 
-> Application web de gestion scolaire pour l'ENSAE (École Nationale de la Statistique et de l'Analyse Économique) de Dakar — Python · Dash Plotly · SQLAlchemy · SQLite/PostgreSQL
+# SGA ENSAE
+### Système de Gestion Académique
 
----
+**Application web de gestion scolaire pour l'ENSAE Dakar**
 
-## Table des matières
-
-- [SGA ENSAE — Système de Gestion Académique](#sga-ensae--système-de-gestion-académique)
-  - [Table des matières](#table-des-matières)
-  - [Présentation](#présentation)
-  - [Stack technique](#stack-technique)
-  - [Structure du projet](#structure-du-projet)
-  - [Installation](#installation)
-    - [requirements.txt minimal](#requirementstxt-minimal)
-  - [Démarrage rapide](#démarrage-rapide)
-  - [Migration des données Excel](#migration-des-données-excel)
-    - [Générer le template](#générer-le-template)
-    - [Feuilles du template](#feuilles-du-template)
-    - [Règles importantes](#règles-importantes)
-    - [Import via l'interface](#import-via-linterface)
-    - [Import en ligne de commande](#import-en-ligne-de-commande)
-  - [Rôles et accès](#rôles-et-accès)
-  - [Modules applicatifs](#modules-applicatifs)
-    - [`pages/login.py`](#pagesloginpy)
-    - [`pages/dashboard.py`](#pagesdashboardpy)
-    - [`pages/cours.py`](#pagescourspy)
-    - [`pages/seances.py`](#pagesseancespy)
-    - [`pages/etudiants.py`](#pagesetudiantspy)
-    - [`pages/bulletins.py`](#pagesbulletinspy)
-    - [`pages/planning.py`](#pagesplanningpy)
-    - [`pages/statistiques.py`](#pagesstatistiquespy)
-    - [`pages/admin.py`](#pagesadminpy)
-    - [`pages/db.py` *(admin uniquement)*](#pagesdbpy-admin-uniquement)
-  - [Navbar et navigation](#navbar-et-navigation)
-  - [Base de données](#base-de-données)
-    - [Tables (14)](#tables-14)
-    - [Filières ENSAE (par défaut)](#filières-ensae-par-défaut)
-    - [Scripts BDD](#scripts-bdd)
-  - [Commandes utiles](#commandes-utiles)
-  - [Variables d'environnement](#variables-denvironnement)
-  - [Workflow planning](#workflow-planning)
-  - [Sécurité](#sécurité)
-  - [Licence](#licence)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Dash](https://img.shields.io/badge/Dash-2.17.0-00B4D8?style=flat-square&logo=plotly&logoColor=white)](https://dash.plotly.com)
+[![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0-D71F00?style=flat-square)](https://sqlalchemy.org)
+[![SQLite](https://img.shields.io/badge/SQLite-dev-003B57?style=flat-square&logo=sqlite&logoColor=white)](https://sqlite.org)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-prod-336791?style=flat-square&logo=postgresql&logoColor=white)](https://postgresql.org)
+[![Licence](https://img.shields.io/badge/Licence-Académique-006B3F?style=flat-square)](LICENSE)
 
 ---
 
-## Présentation
+*Projet académique — Analyste Statisticien · Data Science · 2025-2026*
 
-Le SGA ENSAE remplace la gestion académique par fichiers Excel par une application web centralisée avec :
-
-- **Authentification multi-rôles** (Admin, Resp. Filière, Délégué, Étudiant)
-- **Gestion des cours, séances et présences** avec appel numérique
-- **Suivi des notes** via import/export Excel avec calcul automatique des moyennes
-- **Génération de bulletins PDF** par étudiant ou par classe entière
-- **Migration Excel → SQL** intelligente avec gestion des doublons
-- **Explorateur de base de données** avec CRUD visuel pour l'administrateur
-- **Navbar dynamique** avec menus déroulants CSS par catégorie selon le rôle
+</div>
 
 ---
 
-## Stack technique
+## 📑 Table des matières
 
-| Composant       | Technologie               | Version  |
-|-----------------|---------------------------|----------|
-| Langage         | Python                    | 3.11+    |
-| Framework web   | Dash Plotly               | 2.17.0   |
-| Composants UI   | Dash Bootstrap Components | 1.6.0    |
-| ORM             | SQLAlchemy                | 2.0.30   |
-| BDD dev         | SQLite                    | intégré  |
-| BDD prod        | PostgreSQL                | 15+      |
-| Auth            | bcrypt                    | —        |
-| Export PDF      | ReportLab / FPDF2         | —        |
-| Excel I/O       | openpyxl + pandas         | —        |
-| Emails          | smtplib                   | —        |
+- [Présentation](#-présentation)
+- [Fonctionnalités](#-fonctionnalités)
+- [Stack technique](#-stack-technique)
+- [Architecture du projet](#-architecture-du-projet)
+- [Installation](#-installation)
+- [Démarrage rapide](#-démarrage-rapide)
+- [Peuplement des données fictives](#-peuplement-des-données-fictives)
+- [Migration Excel → SQL](#-migration-excel--sql)
+- [Rôles et accès](#-rôles-et-accès)
+- [Modules applicatifs](#-modules-applicatifs)
+- [Base de données](#-base-de-données)
+- [Variables d'environnement](#-variables-denvironnement)
+- [Commandes utiles](#-commandes-utiles)
+- [Workflow planning](#-workflow-planning)
+- [Sécurité](#-sécurité)
+- [Auteurs](#-auteurs)
 
 ---
 
-## Structure du projet
+## 🧭 Présentation
+
+Le **SGA ENSAE** remplace la gestion académique par fichiers Excel par une application web centralisée, robuste et multi-rôles, développée avec Python et Dash Plotly.
+
+> **Contexte :** Projet de fin de formation — transformation d'un prototype Excel en application web full-stack avec base de données SQL, authentification sécurisée et génération automatique de bulletins PDF.
+
+L'application couvre l'ensemble du cycle académique : de l'inscription des étudiants jusqu'à la génération des bulletins de notes, en passant par la planification des séances, l'appel numérique et le suivi pédagogique.
+
+---
+
+## ✨ Fonctionnalités
+
+| Catégorie | Fonctionnalité |
+|-----------|----------------|
+| **Authentification** | Connexion multi-rôles avec sessions sécurisées |
+| **Pédagogie** | Gestion CRUD des UE, modules, séances et présences |
+| **Planning** | Calendrier interactif avec workflow de validation par e-mail |
+| **Étudiants** | Fiches individuelles, taux d'assiduité, moyenne générale |
+| **Notes** | Import/export Excel, calcul automatique des moyennes et rangs |
+| **Bulletins** | Génération PDF par étudiant ou par classe entière |
+| **Statistiques** | Graphiques Plotly — distribution des notes, absentéisme |
+| **Administration** | Migration Excel → SQL, gestion utilisateurs, explorateur BDD |
+| **Notifications** | E-mails automatiques pour le workflow planning |
+
+---
+
+## 🛠️ Stack technique
+
+| Composant | Technologie | Version |
+|-----------|-------------|---------|
+| Langage | Python | 3.11+ |
+| Framework web | Dash Plotly | 2.17.0 |
+| Composants UI | Dash Bootstrap Components | 1.6.0 |
+| ORM | SQLAlchemy | 2.0.30 |
+| BDD développement | SQLite | intégré |
+| BDD production | PostgreSQL | 15+ |
+| Hachage mots de passe | bcrypt | — |
+| Export PDF | ReportLab / FPDF2 | — |
+| Excel I/O | openpyxl + pandas | — |
+| Emails | smtplib | — |
+| Variables d'env. | python-dotenv | — |
+
+---
+
+## 🗂️ Architecture du projet
 
 ```
 sga_ensae/
-├── app.py                        # Point d'entrée Dash, init BDD, callback navbar
-├── models.py                     # Modèles SQLAlchemy (toutes les tables)
-├── database.py                   # SessionLocal, engine, DB_PATH
-├── auth.py                       # hash_password, verify_password, require_auth
-├── recreate_db.py                # Script recréation BDD + données de base
-├── fix_doublons.py               # Script nettoyage doublons classes/filières
-├── requirements.txt              # Dépendances Python
-├── .env                          # Config email (ne pas commiter)
+│
+├── app.py                    # Point d'entrée — init BDD, routing, navbar
+├── models.py                 # Modèles SQLAlchemy (14 tables)
+├── database.py               # SessionLocal, engine, DB_PATH
+├── auth.py                   # hash_password, verify_password, require_auth
+├── recreate_db.py            # Recréation BDD + données de base
+├── seed_data.py              # Peuplement données fictives complètes
+├── fix_doublons.py           # Nettoyage doublons classes/filières
+├── requirements.txt
+├── .env                      # ⚠️ Ne pas commiter
 │
 ├── assets/
-│   ├── navbar.css                # Styles navbar (menus déroulants CSS pur)
+│   ├── navbar.css            # Menus déroulants CSS pur
 │   └── img/
-│       └── logo_ensae.png        # Logo ENSAE
+│       └── logo_ensae.png
 │
 ├── components/
-│   └── navbar.py                 # Navbar multi-rôles avec dropdowns CSS
+│   └── navbar.py             # Navbar multi-rôles dynamique
 │
 ├── pages/
-│   ├── login.py                  # Authentification
-│   ├── dashboard.py              # Tableau de bord accueil
-│   ├── cours.py                  # Gestion Cours & UE
-│   ├── seances.py                # Séances + appel numérique + historique
-│   ├── etudiants.py              # Fiches étudiants + notes + absentéisme
-│   ├── planning.py               # Calendrier interactif des séances
-│   ├── bulletins.py              # Génération bulletins PDF
-│   ├── statistiques.py           # Graphiques et analyses
-│   ├── admin.py                  # Administration utilisateurs, migration, filières
-│   └── db.py                     # Explorateur base de données (admin uniquement)
+│   ├── login.py              # Authentification
+│   ├── dashboard.py          # Tableau de bord + KPIs
+│   ├── cours.py              # Gestion UE & Modules
+│   ├── seances.py            # Cahier de texte + appel numérique
+│   ├── etudiants.py          # Fiches étudiants + notes
+│   ├── planning.py           # Calendrier interactif
+│   ├── bulletins.py          # Génération bulletins PDF
+│   ├── statistiques.py       # Graphiques analytiques
+│   ├── admin.py              # Administration & migration
+│   └── db.py                 # Explorateur BDD (admin)
 │
 └── utils/
-    ├── migration.py              # Import Excel → SQL (multi-feuilles, 7 feuilles)
-    ├── mailer.py                 # Notifications email automatiques
-    └── pdf_generator.py          # Génération bulletins PDF
+    ├── migration.py          # Import Excel → SQL (7 feuilles)
+    ├── mailer.py             # Notifications e-mail
+    └── pdf_generator.py      # Génération bulletins PDF
 ```
 
 ---
 
-## Installation
+## ⚙️ Installation
+
+### Prérequis
+
+- Python 3.11+
+- pip
+- Git
+
+### Étapes
 
 ```bash
 # 1. Cloner le dépôt
-git clone <url-repo>
+git clone https://github.com/<votre-username>/sga_ensae.git
 cd sga_ensae
 
 # 2. Créer l'environnement virtuel
@@ -130,14 +149,14 @@ python -m venv .venv
 # Windows
 .venv\Scripts\activate
 
-# Linux / Mac
+# Linux / macOS
 source .venv/bin/activate
 
 # 3. Installer les dépendances
 pip install -r requirements.txt
 ```
 
-### requirements.txt minimal
+### `requirements.txt`
 
 ```
 dash>=2.17.0
@@ -153,249 +172,294 @@ python-dotenv
 
 ---
 
-## Démarrage rapide
+## 🚀 Démarrage rapide
 
 ```bash
-# 1. Initialiser la base de données (tables + compte admin + filières + classes)
+# 1. Recréer la base de données (tables + admin + filières + classes + périodes)
 python recreate_db.py
 
 # 2. Lancer l'application
 python app.py
 
 # 3. Ouvrir dans le navigateur
-# http://127.0.0.1:8050
+# → http://127.0.0.1:8050
 ```
 
-**Compte admin par défaut :**
+**Compte administrateur par défaut :**
 
-| Rôle  | Email              | Mot de passe |
-|-------|--------------------|--------------|
-| Admin | admin@ensae.sn     | admin123     |
+| Rôle | E-mail | Mot de passe |
+|------|--------|--------------|
+| `admin` | `admin@ensae.sn` | `admin123` |
 
-> ⚠️ Changer le mot de passe admin après le premier démarrage via la page Administration.
+> ⚠️ **Changer ce mot de passe dès le premier démarrage** via la page Administration.
 
 ---
 
-## Migration des données Excel
+## 🌱 Peuplement des données fictives
 
-### Générer le template
+Pour simuler l'application complète avec des données réalistes sur toutes les tables :
+
+```bash
+# 1. Recréer la base propre
+python recreate_db.py
+
+# 2. Importer étudiants, classes, responsables via Excel
+python utils/migration.py --import migration_sga_ensae_complet.xlsx
+
+# 3. Peupler toutes les autres tables
+python seed_data.py
+
+# 4. Lancer l'application
+python app.py
+```
+
+Le script `seed_data.py` génère automatiquement :
+
+| Table | Volume | Détail |
+|-------|--------|--------|
+| UE | ~43 | Unités d'enseignement par filière et semestre |
+| Modules | ~86 | Avec enseignants et volumes horaires |
+| Séances | ~1 050 | Datées avec thèmes pédagogiques |
+| Présences | ~4 500 | Profil assiduité réaliste par étudiant (82–100 %) |
+| Notes | ~2 000 | Devoir + Examen, distribution gaussienne |
+| Bulletins | S1 & S2 | Moyenne, rang, appréciation automatique |
+| Plannings | ~96 | 8 semaines × 12 classes (validé / soumis / brouillon) |
+
+---
+
+## 📥 Migration Excel → SQL
+
+### Générer le template vierge
 
 ```bash
 python utils/migration.py --template
 # → crée template_migration_ensae.xlsx
 ```
 
-### Feuilles du template
+### Structure du template (7 feuilles)
 
-| Feuille          | Colonnes principales                                        | Couleur   |
-|------------------|-------------------------------------------------------------|-----------|
-| `Filieres`       | Code, Libelle, Duree_ans                                    | 🔵 Bleu   |
-| `Classes`        | Nom, Code_Filiere, Niveau, Is_Commune, Annee_Scolaire       | 🟢 Vert   |
-| `Etudiants`      | Matricule, Nom, Prenom, Email, Date_Naissance, Nom_Classe…  | 🟠 Orange |
-| `Resp_Filieres`  | Nom, Prenom, Email, Mot_de_passe, Code_Filiere              | 🩵 Cyan   |
-| `Resp_Classes`   | Nom, Prenom, Email, Mot_de_passe, Nom_Classe, Type          | 🟡 Ambre  |
-| `Delegues`       | Nom_Classe, Matricule_Titulaire, Matricule_Suppleant        | 🟣 Violet |
-| `⚠ Instructions` | Guide complet d'utilisation                                 | 🔴 Rouge  |
+| Feuille | Colonnes principales | Couleur |
+|---------|---------------------|---------|
+| `Filieres` | Code · Libelle · Duree_ans | 🔵 Bleu |
+| `Classes` | Nom · Code_Filiere · Niveau · Is_Commune · Annee_Scolaire | 🟢 Vert |
+| `Etudiants` | Matricule · Nom · Prenom · Email · Date_Naissance · Nom_Classe · Filiere_Origine · Mot_de_passe | 🟠 Orange |
+| `Resp_Filieres` | Nom · Prenom · Email · Mot_de_passe · Code_Filiere | 🩵 Cyan |
+| `Resp_Classes` | Nom · Prenom · Email · Mot_de_passe · Nom_Classe · Type | 🟡 Ambre |
+| `Delegues` | Nom_Classe · Matricule_Titulaire · Matricule_Suppleant | 🟣 Violet |
+| `⚠️ Instructions` | Guide complet d'utilisation | 🔴 Rouge |
 
 ### Règles importantes
 
-- Les lignes grisées commençant par `#` sont des **exemples** → supprimer avant import
-- Ne jamais modifier les noms des colonnes (ligne 1)
-- **Ordre recommandé** : Filieres → Classes → Etudiants → Resp_Filieres → Resp_Classes → Delegues
-- Mot de passe par défaut pour les étudiants = **matricule** (modifiable après connexion)
-- Si l'email d'un responsable existe déjà en base → **promotion automatique** sans doublon
-- `Type` dans Resp_Classes : `titulaire` ou `suppleant`
-- Dates : format `JJ/MM/AAAA` ou `AAAA-MM-JJ` (les deux acceptés)
+- **Ordre recommandé :** `Filieres` → `Classes` → `Etudiants` → `Resp_Filieres` → `Resp_Classes` → `Delegues`
+- Mot de passe étudiant par défaut = **Matricule** (si laissé vide)
+- `Type` dans `Resp_Classes` : `titulaire` ou `suppleant`
+- Si l'e-mail d'un utilisateur existe déjà → **promotion automatique** sans doublon
+- Dates au format `JJ/MM/AAAA` ou `AAAA-MM-JJ`
 
 ### Import via l'interface
 
-1. Se connecter en tant qu'admin
-2. Aller dans **Administration > Migration de données**
+1. Se connecter en tant qu'`admin`
+2. Aller dans **Admin › Migration de données**
 3. Glisser-déposer le fichier Excel
-4. Vérifier le rapport : lignes importées ✅ · avertissements 🟡 · erreurs 🔴
+4. Vérifier le rapport : importés ✅ · avertissements 🟡 · erreurs 🔴
 
 ### Import en ligne de commande
 
 ```bash
-python utils/migration.py --import mon_fichier.xlsx
+python utils/migration.py --import migration_sga_ensae_complet.xlsx
 ```
 
 ---
 
-## Rôles et accès
+## 👥 Rôles et accès
 
-| Rôle            | Description                     | Accès                                              |
-|-----------------|---------------------------------|----------------------------------------------------|
-| `admin`         | Administrateur système          | Tout — utilisateurs, BDD, migration, stats         |
-| `resp_filiere`  | Responsable pédagogique         | Cours, séances, étudiants, notes, bulletins, stats |
-| `resp_classe`   | Délégué titulaire ou suppléant  | Séances de sa classe, absences, bulletins          |
-| `eleve`         | Étudiant inscrit                | Son bulletin, son planning, ses notes              |
+| Rôle | Description | Accès |
+|------|-------------|-------|
+| `admin` | Administrateur système | Tout — utilisateurs, BDD, migration, statistiques |
+| `resp_filiere` | Responsable pédagogique | Cours, séances, étudiants, notes, bulletins, stats |
+| `resp_classe` | Délégué titulaire ou suppléant | Séances de sa classe, absences, bulletins |
+| `eleve` | Étudiant inscrit | Son bulletin, son planning, ses notes |
 
-**Délégués par classe :**
+Chaque classe dispose de :
 - 1 délégué **titulaire** (`est_titulaire = True`)
 - 1 délégué **suppléant** (`est_titulaire = False`)
 
 ---
 
-## Modules applicatifs
+## 📦 Modules applicatifs
 
-### `pages/login.py`
-Authentification. Crée la session `dcc.Store` avec user_id, rôle, nom, prénom.
+### `pages/login.py` — Authentification
+Page de connexion. Crée la session `dcc.Store` avec `user_id`, `rôle`, `nom`, `prénom`.
 
-### `pages/dashboard.py`
-Tableau de bord accueil avec KPIs (étudiants, cours, séances) et accès rapides adaptés au rôle.
+### `pages/dashboard.py` — Tableau de bord
+KPIs dynamiques (étudiants, cours, séances) et raccourcis adaptés au rôle connecté.
 
-### `pages/cours.py`
-CRUD complet des cours et UE. Suivi de progression horaire (heures effectuées / volume total prévu).
+### `pages/cours.py` — Cours & UE
+CRUD complet des Unités d'Enseignement et modules. Suivi de progression horaire en temps réel (heures effectuées / volume total prévu).
 
-### `pages/seances.py`
+### `pages/seances.py` — Séances & Présences
 Création de séance avec thème pédagogique. Appel numérique via checklist dynamique (coché = absent). Historique filtrable par date ou par cours.
 
-### `pages/etudiants.py`
-Fiche individuelle : informations personnelles, taux d'absentéisme, moyenne générale. Workflow notes : télécharger template → saisir → uploader → mise à jour automatique.
+### `pages/etudiants.py` — Gestion étudiants
+Fiche individuelle : informations personnelles, taux d'assiduité, moyenne générale.
+Workflow notes : **télécharger template → saisir → uploader → mise à jour automatique**.
 
-### `pages/bulletins.py`
-Génération PDF par étudiant ou par classe. Inclut notes, coefficients, moyenne, rang, appréciations.
+### `pages/planning.py` — Planning hebdomadaire
+Calendrier interactif des séances. Workflow de validation avec notifications e-mail automatiques.
 
-### `pages/planning.py`
-Calendrier interactif. Workflow de validation : Resp. Classe propose → Resp. Filière valide/rejette avec notification email.
+### `pages/bulletins.py` — Bulletins PDF
+Génération PDF par étudiant ou par classe entière. Inclut notes, coefficients, moyenne pondérée, rang et appréciations.
 
-### `pages/statistiques.py`
-Graphiques Plotly interactifs : distribution des notes, évolution des moyennes, absentéisme par classe.
+### `pages/statistiques.py` — Analyse & DataViz
+Graphiques Plotly interactifs : distribution des notes (histogramme), évolution des moyennes, taux d'absentéisme par classe.
 
-### `pages/admin.py`
-Gestion des utilisateurs et rôles. Import Excel multi-feuilles avec rapport détaillé. Gestion des filières et classes. Désignation des délégués (titulaire/suppléant).
+### `pages/admin.py` — Administration
+Gestion des utilisateurs et rôles. Import Excel multi-feuilles avec rapport détaillé. Gestion des filières et classes. Désignation des délégués.
 
-### `pages/db.py` *(admin uniquement)*
-Explorateur base de données : liste des 14 tables avec compteur, tableau paginé avec recherche textuelle, édition et suppression directe via modal.
-
----
-
-## Navbar et navigation
-
-Menus déroulants **CSS pur** (sans callbacks Dash) — styles dans `assets/navbar.css`.
-
-| Menu            | Contenu                                  | Visible pour      |
-|-----------------|------------------------------------------|-------------------|
-| Accueil         | Dashboard                                | Tous              |
-| Pédagogie ▾     | Cours & UE · Séances · Planning          | Admin, RF, RC     |
-| Étudiants ▾     | Gestion · Bulletins                      | Admin, RF, RC     |
-| Statistiques    | Graphiques analytiques                   | Admin, RF         |
-| Admin ▾         | Utilisateurs · Base de données · Migration · Filières | Admin |
-| Avatar ▾        | Nom · Rôle · Déconnexion                 | Tous              |
+### `pages/db.py` — Explorateur BDD *(admin uniquement)*
+Liste des 14 tables avec compteur d'enregistrements. Tableau paginé avec recherche textuelle, édition et suppression directe via modal.
 
 ---
 
-## Base de données
+## 🗄️ Base de données
 
-### Tables (14)
+### Schéma relationnel (14 tables)
 
 ```
-users            → etudiants, resp_classes, resp_filieres
-filieres         → classes, resp_filieres
-classes          → etudiants, resp_classes, plannings
-modules          → seances, notes, plannings
-seances          → presences
-etudiants        → presences, notes
-periodes         → modules
-ue               → modules
-migration_logs   (standalone — historique imports)
+users ──────────┬──► etudiants ──────┬──► presences ◄── seances ◄── modules
+                ├──► resp_classes     └──► notes     ◄──────────────── modules
+                ├──► resp_filieres
+                ├──► seances (created_by)
+                ├──► plannings (created_by)
+                └──► bulletins (valide_par)
+
+filieres ───────┬──► classes ─────────┬──► etudiants
+                └──► resp_filieres    ├──► resp_classes
+                                      ├──► planning_classes
+                                      └──► periodes ──► ue ──► modules
+                                                              └──► ue_classes
+
+migration_logs  (standalone — historique imports)
 ```
 
-### Filières ENSAE (par défaut)
+### Filières ENSAE
 
-| Code    | Libellé                                          | Durée |
-|---------|--------------------------------------------------|-------|
-| ISEP    | Ingénieur Statisticien Économiste Préparatoire   | 2 ans |
-| ISE     | Ingénieur Statisticien Économiste                | 3 ans |
-| AS      | Analyste Statisticien                            | 3 ans |
-| MASTERS | Masters Spécialisés                              | 1 an  |
+| Code | Libellé | Durée |
+|------|---------|-------|
+| `ISEP` | Ingénieur Statisticien Économiste Préparatoire | 2 ans |
+| `ISE` | Ingénieur Statisticien Économiste | 3 ans |
+| `AS` | Analyste Statisticien | 3 ans |
+| `MASTERS` | Masters Spécialisés | 1 an |
 
-### Scripts BDD
+### Classes (12)
 
-```bash
-# Recréer la BDD complète (⚠ supprime toutes les données)
-python recreate_db.py
-
-# Nettoyer les doublons classes/filières
-python fix_doublons.py
-```
+`ISEP 1` · `ISEP 2` · `ISE 1 CL` · `ISE Math 1` · `ISE ECO 1` · `ISE 2` · `ISE 3` · `AS 1` · `AS 2` · `AS 3` · `Master ADEPP` · `Master Agricole`
 
 ---
 
-## Commandes utiles
+## 🌿 Variables d'environnement
 
-```bash
-# Générer le template de migration Excel
-python utils/migration.py --template
-
-# Importer des données depuis Excel (CLI)
-python utils/migration.py --import fichier.xlsx
-
-# Recréer la BDD avec données de base
-python recreate_db.py
-
-# Nettoyer les doublons en base
-python fix_doublons.py
-
-# Tester l'envoi d'email
-python utils/mailer.py
-
-# Générer un bulletin PDF (test)
-python utils/pdf_generator.py
-```
-
----
-
-## Variables d'environnement
-
-Créer un fichier `.env` à la racine (**ne jamais commiter**) :
+Créer un fichier `.env` à la racine (**⚠️ ne jamais commiter**) :
 
 ```env
-# Email (notifications automatiques)
+# Notifications e-mail
 MAIL_ADDRESS=votre@gmail.com
-MAIL_PASSWORD=votre_app_password
+MAIL_PASSWORD=votre_app_password_gmail
 MAIL_SERVER=smtp.gmail.com
 MAIL_PORT=587
 
-# Base de données production PostgreSQL (laisser vide pour SQLite en dev)
+# Base de données production (laisser vide pour SQLite en dev)
 DATABASE_URL=
-# Exemple PostgreSQL : postgresql://user:password@localhost/sga_ensae
+# Exemple PostgreSQL :
+# DATABASE_URL=postgresql://user:password@localhost:5432/sga_ensae
+```
+
+> 💡 Pour Gmail, utiliser un [App Password](https://support.google.com/accounts/answer/185833) et non le mot de passe principal du compte.
+
+---
+
+## 💻 Commandes utiles
+
+```bash
+# Base de données
+python recreate_db.py                              # Recréer la BDD complète ⚠️
+python fix_doublons.py                             # Nettoyer les doublons
+
+# Migration & données
+python utils/migration.py --template               # Générer le template Excel
+python utils/migration.py --import fichier.xlsx    # Importer depuis Excel
+python seed_data.py                                # Peupler les données fictives
+
+# Tests & débogage
+python utils/mailer.py                             # Tester l'envoi d'e-mail
+python utils/pdf_generator.py                      # Générer un bulletin PDF test
 ```
 
 ---
 
-## Workflow planning
+## 🗓️ Workflow planning
 
 ```
-Resp. Classe   →  Crée / propose une séance
-                          ↓
-               Email automatique au Resp. Filière
-                          ↓
-Resp. Filière  →  Valide ✅  ou  Rejette ❌
-                          ↓
-               Email automatique au Resp. Classe
-                          ↓
-            Séance confirmée dans le calendrier
+Resp. Classe
+    │
+    ├─ Crée un planning (brouillon)
+    └─ Soumet le planning
+              │
+              ▼
+    E-mail automatique ──► Resp. Filière
+              │
+              ▼
+    Resp. Filière examine
+              │
+        ┌─────┴──────┐
+        ▼            ▼
+    ✅ Valide    ❌ Rejette / Modifie
+        │            │
+        ▼            ▼
+    E-mail ──► Resp. Classe
+        │
+        ▼
+    Séances confirmées dans le calendrier
+    E-mails ──► Enseignants concernés
 ```
 
 ---
 
-## Sécurité
+## 🔒 Sécurité
 
-- Mots de passe hachés avec **bcrypt** (jamais stockés en clair)
-- Sessions client-side via `dcc.Store` (pas de cookie serveur)
+- Mots de passe hachés avec **bcrypt** — jamais stockés en clair
+- Sessions client-side via `dcc.Store` — pas de cookie serveur
 - Vérification du rôle à chaque callback via `require_auth()`
 - Page `/db` accessible uniquement au rôle `admin`
-- Validation des données à l'entrée (emails, matricules, doublons)
+- Validation des données à l'entrée (e-mails, matricules, doublons)
 - Logs de toutes les opérations de migration dans `migration_logs`
+- Fichier `.env` exclu du dépôt via `.gitignore`
 
 ---
 
-## Licence
+## ✍️ Auteurs
 
-Projet académique — ENSAE Dakar · 2025-2026   
-Auteurs :   
--   Papa Magatte Diop   
--   Ndeye Khary Sall    
-Analyste Statisticien option Data Science
+<table>
+  <tr>
+    <td align="center">
+      <strong>Papa Magatte Diop</strong><br>
+      <sub>Analyste Statisticien · Data Science</sub><br>
+      <sub>ENSAE Dakar · Promotion 2025-2026</sub>
+    </td>
+    <td align="center">
+      <strong>Ndeye Khary Sall</strong><br>
+      <sub>Analyste Statisticien · Data Science</sub><br>
+      <sub>ENSAE Dakar · Promotion 2025-2026</sub>
+    </td>
+  </tr>
+</table>
+
+---
+
+<div align="center">
+
+**École Nationale de la Statistique et de l'Analyse Économique — Dakar**
+
+*Projet académique · Data Visualisation · 2025-2026*
+
+</div>
