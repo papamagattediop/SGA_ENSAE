@@ -20,6 +20,7 @@ MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
 SMTP_HOST     = "smtp.gmail.com"
 SMTP_PORT     = 587
 APP_NAME      = "SGA ENSAE"
+APP_URL       = "https://sga-ensae-mm34.onrender.com" 
 
 BLEU = "#003580"
 VERT = "#006B3F"
@@ -256,7 +257,7 @@ def email_planning_soumis(
             modifier ou rejeter ce planning.
         </p>
         <div style="text-align:center;margin-top:24px;">
-            <a href="http://127.0.0.1:8050/planning"
+            <a href="{APP_URL}/planning"
                style="background:{BLEU};color:#ffffff;padding:12px 28px;
                       border-radius:8px;text-decoration:none;font-weight:700;
                       font-size:0.875rem;display:inline-block;">
@@ -306,7 +307,7 @@ def email_planning_valide(
         {f'<p style="color:#374151;font-size:0.85rem;font-weight:700;margin:0 0 8px;">Récapitulatif des séances confirmées :</p>' if seances else ""}
         {tableau}
         <div style="text-align:center;margin-top:24px;">
-            <a href="http://127.0.0.1:8050/planning"
+            <a href="{APP_URL}/planning"
                style="background:{VERT};color:#ffffff;padding:12px 28px;
                       border-radius:8px;text-decoration:none;font-weight:700;
                       font-size:0.875rem;display:inline-block;">
@@ -345,7 +346,7 @@ def email_planning_rejete(
             </p>
         </div>
         <div style="text-align:center;margin-top:24px;">
-            <a href="http://127.0.0.1:8050/planning"
+            <a href="{APP_URL}/planning"
                style="background:#ef4444;color:#ffffff;padding:12px 28px;
                       border-radius:8px;text-decoration:none;font-weight:700;
                       font-size:0.875rem;display:inline-block;">
@@ -384,7 +385,7 @@ def email_planning_modifie(
             </p>
         </div>
         <div style="text-align:center;margin-top:24px;">
-            <a href="http://127.0.0.1:8050/planning"
+            <a href="{APP_URL}/planning"
                style="background:#d97706;color:#ffffff;padding:12px 28px;
                       border-radius:8px;text-decoration:none;font-weight:700;
                       font-size:0.875rem;display:inline-block;">
@@ -432,7 +433,7 @@ def email_planning_prof(
             le planning complet.
         </p>
         <div style="text-align:center;margin-top:20px;">
-            <a href="http://127.0.0.1:8050/planning"
+            <a href="{APP_URL}/planning"
                style="background:{VERT};color:#ffffff;padding:12px 28px;
                       border-radius:8px;text-decoration:none;font-weight:700;
                       font-size:0.875rem;display:inline-block;">
@@ -482,7 +483,7 @@ def email_planning_confirmation_rc(
         {f'<p style="color:#374151;font-size:0.85rem;font-weight:700;margin:0 0 8px;">Récapitulatif des séances soumises :</p>' if seances else ""}
         {tableau}
         <div style="text-align:center;margin-top:24px;">
-            <a href="http://127.0.0.1:8050/planning"
+            <a href="{APP_URL}/planning"
                style="background:{BLEU};color:#ffffff;padding:12px 28px;
                       border-radius:8px;text-decoration:none;font-weight:700;
                       font-size:0.875rem;display:inline-block;">
@@ -613,7 +614,7 @@ def email_bienvenue_etudiant(
 
         <!-- Bouton connexion -->
         <div style="text-align:center;margin-top:8px;">
-            <a href="http://127.0.0.1:8050/login"
+            <a href="{APP_URL}/login"
                style="background:{BLEU};color:#ffffff;padding:13px 32px;
                       border-radius:8px;text-decoration:none;font-weight:700;
                       font-size:0.9rem;display:inline-block;letter-spacing:0.3px;">
@@ -708,7 +709,7 @@ def email_bulletin(
         </div>
 
         <div style="text-align:center;margin-top:24px;">
-            <a href="http://127.0.0.1:8050/bulletins"
+            <a href="{APP_URL}/bulletins"
                style="background:{BLEU};color:#ffffff;padding:12px 28px;
                       border-radius:8px;text-decoration:none;font-weight:700;
                       font-size:0.875rem;display:inline-block;">
