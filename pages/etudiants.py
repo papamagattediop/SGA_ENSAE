@@ -588,14 +588,14 @@ def adapter_layout_eleve(session):
 
 
 # ── Charger automatiquement la fiche de l'élève connecté ────
-# CORRECTIF : suppress_initial_call retiré pour que la fiche
-# se charge dès l'arrivée sur la page, même si la session
-# était déjà présente dans le Store.
+# CORRECTIF : prevent_initial_call='initial_duplicate' permet à Dash
+# d'exécuter ce callback au chargement initial de la page tout en
+# autorisant allow_duplicate=True sur la sortie etudiant-fiche.
 @callback(
     Output("etudiant-fiche",  "children", allow_duplicate=True),
     Output("eleve-auto-load", "data"),
     Input("session-store",    "data"),
-    # prevent_initial_call=True  ← SUPPRIMÉ : c'était la cause du bug
+    prevent_initial_call="initial_duplicate",
 )
 def charger_fiche_eleve(session):
     if not session:
