@@ -614,7 +614,7 @@ def email_bienvenue_etudiant(
 
         <!-- Bouton connexion -->
         <div style="text-align:center;margin-top:8px;">
-            <a href="{APP_URL}/login"
+            <a href="{APP_URL}"
                style="background:{BLEU};color:#ffffff;padding:13px 32px;
                       border-radius:8px;text-decoration:none;font-weight:700;
                       font-size:0.9rem;display:inline-block;letter-spacing:0.3px;">
